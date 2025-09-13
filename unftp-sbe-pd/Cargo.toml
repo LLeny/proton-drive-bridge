@@ -1,0 +1,23 @@
+[package]
+name = "unftp-sbe-pd"
+version = "0.1.0"
+edition = "2024"
+description = "A FTP server based on libunftp, storing files on Proton Drive"
+authors = [ "https://github.com/LLeny" ]
+keywords = ["libunftp", "unftp", "ftp", "ftps", "protondrive", "proton-drive"]
+repository = "https://github.com/LLeny/proton-drive-bridge"
+license-file = "LICENSE"
+readme = "README.md"
+
+[dependencies]
+libunftp = { workspace = true }
+tokio = { workspace = true }
+proton-crypto = { workspace = true }
+pmapi = { path = "../pmapi" }
+elsa = { workspace = true }
+async-trait = { version = "0.1.89" }
+futures = { workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true

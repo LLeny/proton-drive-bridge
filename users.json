@@ -1,0 +1,8 @@
+[
+  {
+    "username": "user",
+    "pbkdf2_salt": "Nq8roLd6+Tw=",
+    "pbkdf2_key": "jlfERENxed6K3QuTB9tVIaR/Brrx780sYUuNP8uvVcY=",
+    "pbkdf2_iter": 500000
+  }
+]

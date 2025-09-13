@@ -1,0 +1,22 @@
+[package]
+name = "proton-drive-bridge"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+log = { workspace = true }
+pmapi = { path = "../pmapi" }
+env_logger = { version = "0.11.8", default-features = false, features = [
+  "auto-color",
+  "humantime",
+] }
+proton-crypto = { workspace = true }
+libunftp = { workspace = true }
+unftp-auth-jsonfile = { git = "https://github.com/LLeny/libunftp.git", branch = "mlsd" }
+unftp-sbe-pd = { path = "../unftp-sbe-pd" }
+clap = { version = "4.5.47", features = ["derive", "env"] }
+anyhow = { version = "1.0.72" }
+
+[lints]
+workspace = true
