@@ -48,7 +48,7 @@ The binary will be available at `target/release/proton-drive-bridge`
 ### Command Line
 
 ```bash
-./target/release/proton-drive-bridge [OPTIONS]
+proton-drive-bridge [OPTIONS]
 ```
 
 #### Options:
@@ -65,7 +65,7 @@ The binary will be available at `target/release/proton-drive-bridge`
 ### Example
 
 ```bash
-./target/release/proton-drive-bridge -u ftpusername --port 2121
+proton-drive-bridge -u ftpusername --port 2121
 ```
 
 ## User Authentication
@@ -105,7 +105,7 @@ Details in the unftp_auth_jsonfile documentation: https://docs.rs/unftp-auth-jso
 
 Specify a custom users file:
 ```bash
-./target/release/proton-drive-bridge --auth-file /path/to/users.json
+proton-drive-bridge --auth-file /path/to/users.json
 ```
 
 ### Environment Variables
