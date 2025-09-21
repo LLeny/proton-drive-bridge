@@ -48,7 +48,7 @@ The binary will be available at `target/release/proton-drive-bridge`
 ### Command Line
 
 ```bash
-./target/release/proton-drive-bridge --cli [OPTIONS]
+proton-drive-bridge --cli [OPTIONS]
 ```
 
 #### Options:
@@ -69,13 +69,13 @@ Notes:
 ### Example
 
 ```bash
-./target/release/proton-drive-bridge --cli -u ftpusername --port 2121
+proton-drive-bridge --cli -u ftpusername --port 2121
 ```
 
 With environment variables:
 
 ```bash
-PROTON_USERNAME=you@example.com PROTON_PASSWORD='yourpass' ./target/release/proton-drive-bridge --cli --port 2121
+PROTON_USERNAME=you@example.com PROTON_PASSWORD='yourpass' proton-drive-bridge --cli --port 2121
 ```
 
 ### Bridge Session Password (CLI)
@@ -123,7 +123,7 @@ Details in the unftp_auth_jsonfile documentation: https://docs.rs/unftp-auth-jso
 
 Specify a custom users file:
 ```bash
-./target/release/proton-drive-bridge --cli --auth-file /path/to/users.json
+proton-drive-bridge --cli --auth-file /path/to/users.json
 ```
 
 ### Environment Variables
