@@ -109,7 +109,7 @@ impl Client {
             return Ok(());
         }
 
-        Err(APIError::Node("Error deleting draft".into()))
+        Err(APIError::Node("Error deleting draft".to_owned()))
     }
 
     pub(crate) async fn delete_nodes(
@@ -167,7 +167,7 @@ impl Client {
                             r.Response
                                 .Error
                                 .as_ref()
-                                .map_or("Unknown".to_string(), std::string::ToString::to_string),
+                                .map_or("Unknown".to_owned(), std::string::ToString::to_string),
                         )
                     })
                     .collect();
@@ -183,7 +183,7 @@ impl Client {
     }
 
     pub(crate) async fn get_node(&self, node_uid: &str) -> Result<EncryptedNode> {
-        let mut nodes = self.get_nodes(&vec![node_uid.to_string()]).await?;
+        let mut nodes = self.get_nodes(&vec![node_uid.to_owned()]).await?;
         Ok(nodes.remove(0))
     }
 
@@ -244,7 +244,7 @@ impl Client {
             SignatureEmail: crypto
                 .SignatureEmail
                 .clone()
-                .ok_or(APIError::Node("Missing SignatureEmail when creating node".into()))?,
+                .ok_or(APIError::Node("Missing SignatureEmail when creating node".to_owned()))?,
             NodeKey: crypto.ArmoredKey.clone(),
         };
 
@@ -262,7 +262,7 @@ impl Client {
         if response.Code.is_ok() {
             Ok(response.Folder.ID)
         } else {
-            Err(APIError::Node("Couldn't create node".into()))
+            Err(APIError::Node("Couldn't create node".to_owned()))
         }
     }
 
@@ -281,7 +281,7 @@ impl Client {
         let file_properties = node_crypto
             .File
             .clone()
-            .ok_or(APIError::Node("Missing File properties for draft".into()))?;
+            .ok_or(APIError::Node("Missing File properties for draft".to_owned()))?;
 
         let draft_request = CreateDraftRequest {
             IntendedUploadSize: intended_upload_size,
@@ -296,7 +296,7 @@ impl Client {
             SignatureAddress: node_crypto
                 .SignatureEmail
                 .clone()
-                .ok_or(APIError::Node("Missing SignatureEmail for draft".into()))?,
+                .ok_or(APIError::Node("Missing SignatureEmail for draft".to_owned()))?,
             NodeKey: node_crypto.ArmoredKey.clone(),
         };
 
@@ -346,7 +346,7 @@ impl Client {
         Err(APIError::Node(
             response
                 .Error
-                .unwrap_or("Failed to create draft revision".into()),
+                .unwrap_or("Failed to create draft revision".to_owned()),
         ))
     }
 

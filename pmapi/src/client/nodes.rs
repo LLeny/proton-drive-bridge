@@ -106,14 +106,14 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             )))?;
 
         let parent = self
-            .get_single_node(parent_uid.to_string(), cache, crypto, remote_client)
+            .get_single_node(parent_uid.to_owned(), cache, crypto, remote_client)
             .await?;
         let parent_folder = parent
             .encrypted
             .EncryptedCrypto
             .Folder
             .as_ref()
-            .ok_or(APIError::Node("Parent should be a folder.".into()))?;
+            .ok_or(APIError::Node("Parent should be a folder.".to_owned()))?;
         let parent_hashkey = &parent_folder.ArmoredHashKey;
 
         let params = crypto.encrypt_new_node_name(
@@ -137,34 +137,34 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     ) -> Result<String> {
         let user = cache
             .get_user()
-            .ok_or(APIError::Node("Coudln't retrieve user".into()))?;
+            .ok_or(APIError::Node("Coudln't retrieve user".to_owned()))?;
 
         let verification_key = cache
             .get_unlocked_address_key(&user.Email)
             .ok_or(APIError::Account(
-                "Couldn't retrieve user address keys".into(),
+                "Couldn't retrieve user address keys".to_owned(),
             ))?
             .into_iter()
             .next() //TODO: pick first for now
             .ok_or(APIError::Account(
-                "No unlocked address keys available".into(),
+                "No unlocked address keys available".to_owned(),
             ))?;
 
         let (node_crypto, node_private_key) = crypto.create_new_node_encrypted_crypto(
             user,
-            &parent_node.keys.public_key,
-            &verification_key.private_key,
+            &parent_node.keys.public,
+            &verification_key.private,
         )?;
 
         let parent_hash_key = parent_node
             .hash_key
             .as_ref()
-            .ok_or(APIError::Node("hash_key required.".into()))?;
+            .ok_or(APIError::Node("hash_key required.".to_owned()))?;
 
         let node_hash_key = crypto.encrypt_hash_key(
             Crypto::<PGPProv, SRPProv>::generate_hashkey().as_ref(),
             &node_private_key,
-            &verification_key.private_key,
+            &verification_key.private,
         )?;
 
         let params = crypto.encrypt_new_node_name(
@@ -207,7 +207,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
 
         let user = cache
             .get_user()
-            .ok_or(APIError::Account("User not loaded".into()))?;
+            .ok_or(APIError::Account("User not loaded".to_owned()))?;
 
         let address_id = cache
             .addresses()
@@ -215,24 +215,24 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .find(|a| a.Email == user.Email)
             .map(|a| a.ID.clone())
             .ok_or(APIError::Account(
-                "Couldn't retrieve user's address.".into(),
+                "Couldn't retrieve user's address.".to_owned(),
             ))?;
 
         let verification_key = cache
             .get_unlocked_address_key(&user.Email)
             .ok_or(APIError::Account(
-                "Couldn't retrieve user address keys".into(),
+                "Couldn't retrieve user address keys".to_owned(),
             ))?
             .into_iter()
             .next() //TODO: pick first for now
             .ok_or(APIError::Account(
-                "No unlocked address keys available".into(),
+                "No unlocked address keys available".to_owned(),
             ))?;
 
         let (mut node_crypto, node_private_key) = crypto.create_new_node_encrypted_crypto(
             user,
-            &parent_node.keys.public_key,
-            &verification_key.private_key,
+            &parent_node.keys.public,
+            &verification_key.private,
         )?;
 
         let content_keys = crypto.generate_node_file_content_key(&node_private_key)?;
@@ -250,7 +250,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         let parent_hash_key = parent_node
             .hash_key
             .as_ref()
-            .ok_or(APIError::Node("hash_key required.".into()))?;
+            .ok_or(APIError::Node("hash_key required.".to_owned()))?;
 
         let name_params = crypto.encrypt_new_node_name(
             parent_node,
@@ -278,7 +278,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
                 user.Email.clone(),
                 &node_private_key,
                 &content_keys.content_key_packet_session_key,
-                &verification_key.private_key,
+                &verification_key.private,
                 address_id,
                 reader,
                 crypto,

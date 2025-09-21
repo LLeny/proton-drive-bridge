@@ -1,11 +1,27 @@
 use crate::errors::ErrorCode;
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use derivative::Derivative;
-use proton_crypto_account::keys::UnlockedUserKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_aux::prelude::*;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
-pub(crate) fn from_base64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+#[allow(clippy::ref_option)]
+pub fn to_option_base64<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+    let base64 = v.as_ref().map(|v| BASE64_STANDARD.encode(v));
+    <Option<String>>::serialize(&base64, s)
+}
+
+pub fn from_option_base64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+    let base64 = <Option<String>>::deserialize(d)?;
+    match base64 {
+        Some(v) => BASE64_STANDARD.decode(v.as_bytes())
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+        None => Ok(None),
+    }
+}
+
+pub fn from_base64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
     use serde::de;
     <&str>::deserialize(deserializer).and_then(|s| {
         BASE64_STANDARD
@@ -19,6 +35,12 @@ pub fn to_base64<S: Serializer>(v: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
     String::serialize(&base64, s)
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+pub fn bool_to_integer<S: Serializer>(v: &bool, s: S) -> Result<S::Ok, S::Error> {
+    let i = u8::from(*v);
+    u8::serialize(&i, s)
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case, dead_code)]
 pub(crate) struct GetAddressesResponse {
@@ -26,7 +48,7 @@ pub(crate) struct GetAddressesResponse {
     pub Addresses: Vec<AddressResponse>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
 #[allow(non_snake_case, dead_code)]
 pub(crate) struct AddressResponse {
     pub ID: String,
@@ -36,7 +58,7 @@ pub(crate) struct AddressResponse {
     pub Keys: Vec<AddressKey>,
 }
 
-#[derive(Derivative, Deserialize, Clone)]
+#[derive(Derivative, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
 #[derivative(Debug)]
 #[allow(non_snake_case, dead_code)]
 pub(crate) struct AddressKey {
@@ -49,12 +71,25 @@ pub(crate) struct AddressKey {
     #[derivative(Debug = "ignore")]
     pub Token: String,
     pub Signature: String,
+    #[serde(
+        deserialize_with = "deserialize_bool_from_anything",
+        serialize_with = "bool_to_integer"
+    )]
+    pub Primary: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
 #[allow(non_snake_case, dead_code)]
 pub(crate) struct KeySalts {
-    pub KeySalts: Vec<proton_crypto_account::salts::Salt>,
+    pub KeySalts: Vec<Salt>,
+}
+
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct Salt {
+    pub ID: String,
+    #[serde(deserialize_with = "from_option_base64", serialize_with = "to_option_base64")]
+    pub KeySalt: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -164,7 +199,9 @@ pub(crate) struct UserResponse {
     pub User: Option<User>,
 }
 
-#[derive(serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug)]
+#[derive(
+    serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Zeroize, Debug, Clone, Copy,
+)]
 #[repr(u8)]
 pub(crate) enum DelinquentState {
     Paid = 0,
@@ -174,7 +211,9 @@ pub(crate) enum DelinquentState {
     NotReceived = 4,
 }
 
-#[derive(serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug)]
+#[derive(
+    serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Zeroize, Debug, Clone, Copy,
+)]
 #[repr(u8)]
 pub(crate) enum UserType {
     Proton = 1,  // internal
@@ -183,7 +222,7 @@ pub(crate) enum UserType {
     Credentialless = 4,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
 #[allow(non_snake_case, dead_code)]
 pub(crate) struct ProductUsedSpace {
     pub Calendar: u64,
@@ -193,7 +232,7 @@ pub(crate) struct ProductUsedSpace {
     pub Pass: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
 #[allow(non_snake_case, dead_code)]
 pub(crate) struct User {
     pub ID: String,
@@ -202,14 +241,86 @@ pub(crate) struct User {
     pub UsedSpace: u64,
     pub ProductUsedSpace: ProductUsedSpace,
     pub MaxSpace: u64,
-    #[serde(deserialize_with = "deserialize_bool_from_anything")]
+    #[serde(
+        deserialize_with = "deserialize_bool_from_anything",
+        serialize_with = "bool_to_integer"
+    )]
     pub Private: bool,
     pub Subscribed: u32,
     pub Services: u32,
     pub Delinquent: DelinquentState,
     pub Email: String,
     pub DisplayName: String,
-    pub Keys: proton_crypto_account::keys::UserKeys,
+    pub Keys: Vec<LockedKey>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct LockedKey {
+    pub ID: String,
+    pub Version: u32,
+    pub PrivateKey: String,
+    pub Token: Option<String>,
+    pub Signature: Option<String>,
+    pub Activation: Option<String>,
+    #[serde(
+        deserialize_with = "deserialize_bool_from_anything",
+        serialize_with = "bool_to_integer"
+    )]
+    pub Primary: bool,
+    #[serde(
+        deserialize_with = "deserialize_bool_from_anything",
+        serialize_with = "bool_to_integer"
+    )]
+    pub Active: bool,
+}
+
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
+pub(crate) struct PrivateKey {
+    pub data: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
+pub(crate) struct PublicKey {
+    pub data: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop, Clone)]
+pub(crate) struct UnlockedUserKey {
+    pub id: String,
+    pub public: PublicKey,
+    pub private: PrivateKey,
+}
+
+#[derive(Serialize)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct RefreshSessionRequest {
+    pub RefreshToken: String,
+    pub ResponseType: &'static str,
+    pub GrantType: &'static str,
+}
+
+impl RefreshSessionRequest {
+    pub fn new(refresh_token: String) -> Self {
+        Self {
+            RefreshToken: refresh_token,
+            ResponseType: "token",
+            GrantType: "refresh_token",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct RefreshSessionResponse {
+    pub Code: ErrorCode,
+    pub Error: Option<String>,
+    pub AccessToken: String,
+    pub ExpiresIn: u64,
+    pub TokenType: String,
+    pub Scopes: Vec<String>,
+    pub UID: String,
+    pub RefreshToken: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -517,8 +628,8 @@ pub(crate) struct DecryptedNode<PGPProv: proton_crypto::crypto::PGPProviderSync>
     pub encrypted: EncryptedNode,
     pub name: String,
     pub author_name: String,
-    pub(crate) keys: UnlockedUserKey<PGPProv>,
-    pub(crate) name_verification_key: PGPProv::PublicKey,
+    pub(crate) keys: UnlockedUserKey,
+    pub(crate) name_verification_key: PublicKey,
     pub(crate) content_session_key: Option<PGPProv::SessionKey>,
     pub(crate) hash_key: Option<String>,
 }

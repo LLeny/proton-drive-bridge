@@ -2,6 +2,7 @@ pub(crate) const APP_VERSION: &str = "windows-drive@1.10.1";
 pub(crate) const URL_API_HOST: &str = "https://account.proton.me/api/";
 pub(crate) const AUTH_INFO_ENDPOINT: &str = "core/v4/auth/info";
 pub(crate) const AUTH_ENDPOINT: &str = "core/v4/auth";
+pub(crate) const REFRESH_ENDPOINT: &str = "core/v4/auth/refresh";
 pub(crate) const USERS_ENDPOINT: &str = "core/v4/users";
 pub(crate) const SALTS_ENDPOINT: &str = "core/v4/keys/salts";
 pub(crate) const ADDRESSES_ENDPOINT: &str = "core/v4/addresses";

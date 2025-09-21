@@ -1,7 +1,9 @@
+use crate::client::authenticator::Password;
+use crate::client::session_store::SessionStore;
 use crate::errors::Result;
 use crate::remote::payloads::{
     DecryptedNode, DecryptedRootShare, EncryptedNode, EncryptedNodeCrypto, EncryptedRootShare,
-    NodeType, RenameLinkParameters, User,
+    NodeType, PrivateKey, PublicKey, RenameLinkParameters, UnlockedUserKey, User,
 };
 use crate::{
     client::cache::Cache,
@@ -10,6 +12,7 @@ use crate::{
 };
 use base64::{Engine, prelude::BASE64_STANDARD};
 use hmac::{Hmac, Mac};
+use proton_crypto::srp::HashedPassword as _;
 use proton_crypto::{
     crypto::{
         DataEncoding, Decryptor, DecryptorSync, DetachedSignatureVariant, Encryptor,
@@ -18,148 +21,178 @@ use proton_crypto::{
     },
     srp::SRPProvider,
 };
-use proton_crypto_account::{
-    keys::{DecryptedUserKey, KeyId, UnlockedUserKey},
-    salts::KeySecret,
-};
 use sha2::Sha256;
 use std::{fmt::Debug, io::Write, path::Path};
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub(crate) struct Crypto<PGPProv: PGPProviderSync, SRPProv: SRPProvider> {
+pub struct Crypto<PGPProv: PGPProviderSync, SRPProv: SRPProvider> {
     pgp_provider: PGPProv,
     srp_provider: SRPProv,
-    password: Option<Vec<u8>>,
 }
 
 impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
-    pub(crate) fn new(pgp_provider: PGPProv, srp_provider: SRPProv) -> Self {
+    /// Creates a new cryptography helper bound to the given PGP and SRP providers.
+    ///
+    /// This type encapsulates all cryptographic operations required by the client,
+    /// delegating to the provided implementations.
+    ///
+    /// # Errors
+    ///
+    /// This constructor does not return errors.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    pub fn new(pgp_provider: PGPProv, srp_provider: SRPProv) -> Self {
         Self {
             pgp_provider,
             srp_provider,
-            password: None,
         }
     }
 
-    pub(crate) fn set_password(&mut self, password: Vec<u8>) {
-        self.password = Some(password);
+    pub(crate) fn get_pgp_provider(&self) -> &PGPProv {
+        &self.pgp_provider
     }
 
     //TODO: Key ids ?
-    pub(crate) fn unlock_user_keys(&self, cache: &Cache<PGPProv>) -> Result<()> {
-        let salts = cache
+    pub(crate) fn unlock_user_keys(
+        &self,
+        password: &Password,
+        store: &mut SessionStore,
+    ) -> Result<()> {
+        // TODO:Only the first salt's passphrase?
+        let salts = store
             .get_salts()
-            .ok_or_else(|| APIError::Account("Salts not loaded.".into()))?;
+            .ok_or_else(|| APIError::Account("Salts not loaded.".to_owned()))?;
 
-        for salt in salts.KeySalts.iter().filter(|s| s.key_salt.is_some()) {
-            let Some(key_salt) = salt.key_salt.as_ref() else {
-                continue;
-            };
-            let passphrase = key_salt
-                .salted_key_passphrase(
-                    &self.srp_provider,
-                    self.password
-                        .as_ref()
-                        .ok_or(APIError::Account("Password not set".into()))?,
-                )
-                .map_err(APIError::Salt)?;
-
-            cache.add_passphrase(
-                salt.id.0.clone(),
-                Vec::from(passphrase.as_bytes().to_vec().as_mut_slice()),
-            );
-        }
-
-        let first_salt_id = salts
+        let salt = salts
             .KeySalts
-            .first()
-            .ok_or(APIError::Account("No salts available".into()))?
-            .id
-            .0
-            .clone();
-        let passphrase = KeySecret::new(
-            cache
-                .get_passphrase(&first_salt_id)
-                .ok_or(APIError::Account("Missing cached passphrase".into()))?
-                .clone()
-                .into_vec(),
-        );
+            .iter()
+            .filter(|s| s.KeySalt.is_some())
+            .nth(0)
+            .ok_or(APIError::Account("No salts available".to_owned()))?;
 
-        let user = cache
+        let vecsalt = salt
+            .KeySalt
+            .as_ref()
+            .ok_or(APIError::Account("No salts available".to_owned()))?;
+
+        let passphrase = self.salt_password(vecsalt, password)?;
+
+        let first_salt_id = salt.ID.clone();
+
+        store.add_passphrase(first_salt_id.clone(), passphrase);
+
+        let passphrase = store
+            .get_passphrase(&first_salt_id)
+            .ok_or(APIError::Account("Missing cached passphrase".to_owned()))?;
+
+        let user = store
             .get_user()
-            .ok_or(APIError::Account("User not loaded".into()))?;
-
-        let results = user.Keys.unlock(&self.pgp_provider, &passphrase);
-
+            .ok_or(APIError::Account("User not loaded".to_owned()))?;
+        let results = user.unlock_keys(passphrase, &self.pgp_provider)?;
         let email = user.Email.clone();
 
-        results
-            .unlocked_keys
-            .iter()
-            .for_each(|k| cache.add_unlocked_user_key(&email, k.clone()));
+        for k in &results {
+            store.add_unlocked_user_key(&email, k.clone());
+        }
 
         Ok(())
     }
 
-    pub(crate) fn unlock_address_keys(&self, cache: &Cache<PGPProv>) -> Result<()> {
-        let user = cache
+    pub(crate) fn unlock_address_keys(&self, store: &mut SessionStore) -> Result<()> {
+        let user = store
             .get_user()
-            .ok_or(APIError::Account("User not loaded".into()))?;
-        let user_keys = cache.get_unlocked_user_keys(&user.Email).ok_or_else(|| {
-            APIError::Account(format!(
-                "Couldn't find unlocked keys for user '{}'",
-                user.Email
-            ))
+            .ok_or(APIError::Account("User not loaded".to_owned()))?;
+        let email = user.Email.clone();
+
+        let user_keys = store.get_unlocked_user_keys(&email).ok_or_else(|| {
+            APIError::Account(format!("Couldn't find unlocked keys for user '{email}'"))
         })?;
 
-        let priv_keys: Vec<PGPProv::PrivateKey> =
-            user_keys.iter().map(|k| k.private_key.clone()).collect();
-        let pub_keys: Vec<PGPProv::PublicKey> =
-            user_keys.iter().map(|k| k.public_key.clone()).collect();
+        let priv_keys: Vec<PGPProv::PrivateKey> = user_keys
+            .iter()
+            .map(|k| k.private.to_pgp(&self.pgp_provider).unwrap())
+            .collect();
+        let pub_keys: Vec<PGPProv::PublicKey> = user_keys
+            .iter()
+            .map(|k| k.public.to_pgp(&self.pgp_provider).unwrap())
+            .collect();
 
-        for addr in cache.addresses() {
-            for key in &addr.Keys {
+        #[allow(clippy::type_complexity)]
+        let addresses_info: Vec<(String, Vec<(String, String, String, String)>)> = store
+            .addresses()
+            .into_iter()
+            .map(|addr| {
+                let email = addr.Email.clone();
+                let keys = addr
+                    .Keys
+                    .iter()
+                    .filter(|k| k.Primary)
+                    .map(|k| {
+                        (
+                            k.Token.clone(),
+                            k.ID.clone(),
+                            k.PrivateKey.clone(),
+                            k.PublicKey.clone(),
+                        )
+                    })
+                    .collect();
+                (email, keys)
+            })
+            .collect();
+
+        for (addr_email, keys) in addresses_info {
+            for (token, key_id, private_key_armored, public_key_armored) in keys {
                 let passphrase = self
                     .pgp_provider
                     .new_decryptor()
                     .with_decryption_keys(priv_keys.as_slice())
                     .with_verification_keys(pub_keys.as_slice())
-                    .decrypt(&key.Token, DataEncoding::Armor)
+                    .decrypt(&token, DataEncoding::Armor)
                     .map_err(|e| APIError::PGP(e.to_string()))?;
 
                 if !passphrase.is_verified() {
-                    return Err(APIError::PGP(format!("Couldn't verify key '{}'", key.ID)));
+                    return Err(APIError::PGP(format!("Couldn't verify key '{key_id}'")));
                 }
 
-                let decrypted_key = DecryptedUserKey {
-                    id: KeyId(key.ID.clone()),
-                    private_key: self
-                        .pgp_provider
-                        .private_key_import(
-                            &key.PrivateKey,
-                            passphrase.as_bytes(),
-                            DataEncoding::Armor,
-                        )
-                        .map_err(|e| APIError::PGP(e.to_string()))?,
-                    public_key: self
-                        .pgp_provider
-                        .public_key_import(key.PublicKey.as_bytes(), DataEncoding::Armor)
-                        .map_err(|e| APIError::PGP(e.to_string()))?,
+                let decrypted_key = UnlockedUserKey {
+                    id: key_id,
+                    private: PrivateKey::new(
+                        &self
+                            .pgp_provider
+                            .private_key_import(
+                                &private_key_armored,
+                                passphrase.as_bytes(),
+                                DataEncoding::Armor,
+                            )
+                            .map_err(|e| APIError::PGP(e.to_string()))?,
+                        &self.pgp_provider,
+                    )?,
+                    public: public_key_armored.into(),
                 };
 
-                cache.add_unlocked_address_key(&addr.Email, decrypted_key);
+                store.add_unlocked_address_key(&addr_email, decrypted_key);
             }
         }
 
         Ok(())
     }
 
+    fn salt_password(&self, salt: impl AsRef<[u8]>, password: &Password) -> Result<Password> {
+        let result = self
+            .srp_provider
+            .mailbox_password(password.0.as_slice(), salt)
+            .map_err(|e| APIError::Salt(e.to_string()))?;
+        Ok(Password(result.password_hash().to_vec()))
+    }
+
     pub(crate) fn decrypt_root_share(
         &self,
         share: &EncryptedRootShare,
         cache: &Cache<PGPProv>,
-    ) -> Result<(DecryptedRootShare, UnlockedUserKey<PGPProv>)> {
+    ) -> Result<(DecryptedRootShare, UnlockedUserKey)> {
         let addr_keys = cache
             .get_unlocked_address_key(&share.CreatorEmail)
             .ok_or_else(|| {
@@ -169,10 +202,14 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
                 ))
             })?;
 
-        let pub_keys: Vec<PGPProv::PublicKey> =
-            addr_keys.iter().map(|k| k.public_key.clone()).collect();
-        let pri_keys: Vec<PGPProv::PrivateKey> =
-            addr_keys.iter().map(|k| k.private_key.clone()).collect();
+        let pub_keys: Vec<PGPProv::PublicKey> = addr_keys
+            .iter()
+            .map(|k| k.public.to_pgp(&self.pgp_provider).unwrap())
+            .collect();
+        let pri_keys: Vec<PGPProv::PrivateKey> = addr_keys
+            .iter()
+            .map(|k| k.private.to_pgp(&self.pgp_provider).unwrap())
+            .collect();
 
         let passphrase = self
             .pgp_provider
@@ -221,15 +258,18 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             Author: Ok(share.CreatorEmail.clone()),
         };
 
-        let decrypted_key = DecryptedUserKey {
-            id: KeyId(decrypted_share.ShareID.clone()),
-            public_key: self
-                .pgp_provider
-                .private_key_to_public_key(&priv_key)
-                .map_err(|e| {
-                    APIError::PGP(format!("Couldn't derive public key from private key: {e}"))
-                })?,
-            private_key: priv_key,
+        let decrypted_key = UnlockedUserKey {
+            id: decrypted_share.ShareID.clone(),
+            public: PublicKey::new(
+                &self
+                    .pgp_provider
+                    .private_key_to_public_key(&priv_key)
+                    .map_err(|e| {
+                        APIError::PGP(format!("Couldn't derive public key from private key: {e}"))
+                    })?,
+                &self.pgp_provider,
+            )?,
+            private: PrivateKey::new(&priv_key, &self.pgp_provider)?,
         };
 
         Ok((decrypted_share, decrypted_key))
@@ -248,7 +288,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
                 cache
                     .get_unlocked_address_key(signature_email)
                     .and_then(|v| v.into_iter().next())
-                    .map(|k| k.public_key.clone())
+                    .map(|k| k.public.clone())
             });
 
         let node_parent_key = Self::get_parent_keys(encrypted_node, cache)?.clone();
@@ -256,7 +296,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
         let key_verification_key = if let Some(key) = signature_email_key.clone() {
             key
         } else {
-            self.to_public(&node_parent_key)?
+            node_parent_key.to_public(&self.pgp_provider)?
         };
 
         let name_signature_email = encrypted_node
@@ -277,8 +317,8 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             cache
                 .get_unlocked_address_key(&name_signature_email)
                 .and_then(|v| v.into_iter().next())
-                .map(|k| k.public_key.clone())
-                .unwrap_or(self.to_public(&node_parent_key)?)
+                .map(|k| k.public.clone())
+                .unwrap_or(node_parent_key.to_public(&self.pgp_provider)?)
         };
 
         let (name, author_name) =
@@ -296,7 +336,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             hash_key = Some(
                 String::from_utf8(self.decrypt(
                     &folder.ArmoredHashKey,
-                    &decrypted_node_key.private_key,
+                    &decrypted_node_key.private,
                     &key_verification_key,
                 )?)
                 .map_err(|e| {
@@ -331,42 +371,41 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
     pub(crate) fn decrypt_content_key(
         &self,
         content_key_packet: impl AsRef<[u8]>,
-        decrypted_node_key: &DecryptedUserKey<PGPProv::PrivateKey, PGPProv::PublicKey>,
-        key_verification_key: &PGPProv::PublicKey,
+        decrypted_node_key: &UnlockedUserKey,
+        key_verification_key: &PublicKey,
     ) -> Result<PGPProv::SessionKey> {
+        let decryption_key = decrypted_node_key.private.to_pgp(&self.pgp_provider)?;
+        let node_verification_key = decrypted_node_key.public.to_pgp(&self.pgp_provider)?;
+        let key_verification_key = key_verification_key.to_pgp(&self.pgp_provider)?;
+
         self.pgp_provider
             .new_decryptor()
-            .with_verification_key(key_verification_key)
-            .with_verification_key(&decrypted_node_key.public_key)
-            .with_decryption_key(&decrypted_node_key.private_key)
+            .with_verification_key(&key_verification_key)
+            .with_verification_key(&node_verification_key)
+            .with_decryption_key(&decryption_key)
             .decrypt_session_key(content_key_packet)
             .map_err(|e| APIError::PGP(format!("Couldn't decrypt content key packet: {e:?}")))
-    }
-
-    fn to_public(&self, priv_key: &PGPProv::PrivateKey) -> Result<PGPProv::PublicKey> {
-        let priv_as_pub_key = self
-            .pgp_provider
-            .private_key_to_public_key(priv_key)
-            .map_err(|e| APIError::PGP(format!("Couldn't convert private to public key: {e:?}")))?;
-        Ok(priv_as_pub_key)
     }
 
     fn decrypt(
         &self,
         data: impl AsRef<[u8]>,
-        decryption_key: &PGPProv::PrivateKey,
-        verification_key: &PGPProv::PublicKey,
+        decryption_key: &PrivateKey,
+        verification_key: &PublicKey,
     ) -> Result<Vec<u8>> {
+        let decryption_key = decryption_key.to_pgp(&self.pgp_provider)?;
+        let verification_key = verification_key.to_pgp(&self.pgp_provider)?;
+
         let decrypted = self
             .pgp_provider
             .new_decryptor()
-            .with_decryption_key(decryption_key)
-            .with_verification_key(verification_key)
+            .with_decryption_key(&decryption_key)
+            .with_verification_key(&verification_key)
             .decrypt(data, DataEncoding::Armor)
             .map_err(|e| APIError::PGP(format!("Couldn't decrypt: {e:?}")))?;
 
         if !decrypted.is_verified() {
-            return Err(APIError::PGP("Couldn't verify.".into()));
+            return Err(APIError::PGP("Couldn't verify.".to_owned()));
         }
 
         Ok(decrypted.as_bytes().to_vec())
@@ -375,14 +414,17 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
     fn decrypt_node_name(
         &self,
         encrypted_node: &EncryptedNode,
-        parent_key: &PGPProv::PrivateKey,
-        name_verification_key: &PGPProv::PublicKey,
+        parent_key: &PrivateKey,
+        name_verification_key: &PublicKey,
     ) -> Result<(String, String)> {
+        let decryption_key = parent_key.to_pgp(&self.pgp_provider)?;
+        let verification_key = name_verification_key.to_pgp(&self.pgp_provider)?;
+
         let name = self
             .pgp_provider
             .new_decryptor()
-            .with_decryption_key(parent_key)
-            .with_verification_key(name_verification_key)
+            .with_decryption_key(&decryption_key)
+            .with_verification_key(&verification_key)
             .decrypt(&encrypted_node.EncryptedName, DataEncoding::Armor)
             .map_err(|e| {
                 APIError::PGP(format!(
@@ -416,14 +458,17 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
     fn decrypt_node_key(
         &self,
         encrypted_node: &EncryptedNode,
-        parent_key: &PGPProv::PrivateKey,
-        key_verification_key: &PGPProv::PublicKey,
-    ) -> Result<UnlockedUserKey<PGPProv>> {
+        parent_key: &PrivateKey,
+        key_verification_key: &PublicKey,
+    ) -> Result<UnlockedUserKey> {
+        let decryption_key = parent_key.to_pgp(&self.pgp_provider)?;
+        let verification_key = key_verification_key.to_pgp(&self.pgp_provider)?;
+
         let passphrase = self
             .pgp_provider
             .new_decryptor()
-            .with_verification_key(key_verification_key)
-            .with_decryption_key(parent_key)
+            .with_verification_key(&verification_key)
+            .with_decryption_key(&decryption_key)
             .decrypt(
                 encrypted_node
                     .EncryptedCrypto
@@ -459,27 +504,30 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
                 ))
             })?;
 
-        Ok(DecryptedUserKey {
-            id: KeyId(encrypted_node.Uid.clone()),
-            public_key: self
-                .pgp_provider
-                .private_key_to_public_key(&priv_key)
-                .map_err(|e| {
-                    APIError::PGP(format!("Couldn't derive public key from private key: {e}"))
-                })?,
-            private_key: priv_key,
+        Ok(UnlockedUserKey {
+            id: encrypted_node.Uid.clone(),
+            public: PublicKey::new(
+                &self
+                    .pgp_provider
+                    .private_key_to_public_key(&priv_key)
+                    .map_err(|e| {
+                        APIError::PGP(format!("Couldn't derive public key from private key: {e}"))
+                    })?,
+                &self.pgp_provider,
+            )?,
+            private: PrivateKey::new(&priv_key, &self.pgp_provider)?,
         })
     }
 
     pub(crate) fn get_parent_keys<'a>(
         node: &EncryptedNode,
         cache: &'a Cache<PGPProv>,
-    ) -> Result<&'a PGPProv::PrivateKey> {
+    ) -> Result<&'a PrivateKey> {
         if let Some(parent_uid) = &node.ParentUid {
             return cache.get_node_private_key(parent_uid);
         } else if let Some(share_id) = &node.ShareId {
             let key = cache.get_share_private_key(share_id)?;
-            return Ok(&key.private_key);
+            return Ok(&key.private);
         }
         Err(APIError::Node(format!(
             "Couldn't find parent of '{}'",
@@ -528,8 +576,8 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
     pub(crate) fn create_new_node_encrypted_crypto(
         &self,
         user: &User,
-        encryption_key: &PGPProv::PublicKey,
-        signing_key: &PGPProv::PrivateKey,
+        encryption_key: &PublicKey,
+        signing_key: &PrivateKey,
     ) -> Result<(EncryptedNodeCrypto, PGPProv::PrivateKey)> {
         let passphrase = Self::generate_passphrase();
         let new_private_key = self
@@ -539,12 +587,15 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             .generate()
             .map_err(|e| APIError::PGP(format!("Couldn't generate new key: {e:?}")))?;
 
+        let encryption_key = encryption_key.to_pgp(&self.pgp_provider)?;
+        let signing_key = signing_key.to_pgp(&self.pgp_provider)?;
+
         let mut encrypted_passphrase: Vec<u8> = vec![];
         let passphrase_encryptor = self
             .pgp_provider
             .new_encryptor()
-            .with_encryption_key(encryption_key)
-            .with_signing_key(signing_key);
+            .with_encryption_key(&encryption_key)
+            .with_signing_key(&signing_key);
 
         let mut encryptor_writer = passphrase_encryptor
             .encrypt_stream_with_detached_signature(
@@ -574,8 +625,8 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
 
         Ok((
             EncryptedNodeCrypto {
-                SignatureEmail: Some(user.Email.to_string()),
-                NameSignatureEmail: Some(user.Email.to_string()),
+                SignatureEmail: Some(user.Email.clone()),
+                NameSignatureEmail: Some(user.Email.clone()),
                 ArmoredKey: String::from_utf8(armored_key_data).unwrap(),
                 ArmoredNodePassphrase: encrypted_passphrase,
                 ArmoredNodePassphraseSignature: passphrase_signature,
@@ -617,7 +668,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
         &self,
         hash_key: impl AsRef<[u8]>,
         node_private_key: &PGPProv::PrivateKey,
-        verif_key: &PGPProv::PrivateKey,
+        verif_key: &PrivateKey,
     ) -> Result<String> {
         let node_key = self
             .pgp_provider
@@ -626,11 +677,13 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
                 APIError::PGP(format!("Couldn't derive public key from private key: {e}"))
             })?;
 
+        let verif_key = verif_key.to_pgp(&self.pgp_provider)?;
+
         let encrypted = self
             .pgp_provider
             .new_encryptor()
             .with_encryption_key(&node_key)
-            .with_signing_key(verif_key)
+            .with_signing_key(&verif_key)
             .encrypt(hash_key)
             .map_err(|e| APIError::PGP(format!("Couldn't encrypt hash key: {e:?}")))?
             .armor()
@@ -651,25 +704,28 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
     ) -> Result<RenameLinkParameters> {
         let user = cache
             .get_user()
-            .ok_or(APIError::Account("User not loaded".into()))?;
+            .ok_or(APIError::Account("User not loaded".to_owned()))?;
         let user_email: String = user.Email.clone();
 
         let address_key = cache
             .get_unlocked_address_key(&user_email)
             .ok_or(APIError::Account(
-                "Couldn't retrieve user address keys".into(),
+                "Couldn't retrieve user address keys".to_owned(),
             ))?
             .into_iter()
             .next()
             .ok_or(APIError::Account(
-                "No unlocked address keys available".into(),
+                "No unlocked address keys available".to_owned(),
             ))?;
+
+        let encryption_key = parent.keys.public.to_pgp(&self.pgp_provider)?;
+        let signing_key = address_key.private.to_pgp(&self.pgp_provider)?;
 
         let encrypted_name = String::from_utf8(
             self.pgp_provider
                 .new_encryptor()
-                .with_encryption_key(&parent.keys.public_key)
-                .with_signing_key(&address_key.private_key)
+                .with_encryption_key(&encryption_key)
+                .with_signing_key(&signing_key)
                 .encrypt(new_name)
                 .map_err(|e| APIError::PGP(format!("Couldn't encrypt name: {e:?}")))?
                 .armor()
@@ -689,7 +745,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
                 mime_guess::from_path(Path::new(new_name))
                     .first_or_octet_stream()
                     .as_ref()
-                    .to_string(),
+                    .to_owned(),
             )
         } else {
             None
@@ -820,4 +876,104 @@ pub(crate) struct NodeFileContentKey<PGPProv: PGPProviderSync> {
     pub content_key_packet_session_key: PGPProv::SessionKey,
     pub encrypted_session_key: Vec<u8>,
     pub armored_session_key_signature: Vec<u8>,
+}
+
+impl PublicKey {
+    pub(crate) fn new<PGPProv: PGPProviderSync>(
+        key: &PGPProv::PublicKey,
+        pgp_provider: &PGPProv,
+    ) -> Result<Self> {
+        let data = pgp_provider
+            .public_key_export(key, DataEncoding::Armor)
+            .map_err(|e| APIError::PGP(e.to_string()))?;
+        Ok(Self {
+            data: data.as_ref().to_vec(),
+        })
+    }
+
+    pub(crate) fn to_pgp<PGPProv: PGPProviderSync>(
+        &self,
+        pgp_provider: &PGPProv,
+    ) -> Result<PGPProv::PublicKey> {
+        pgp_provider
+            .public_key_import(&self.data, proton_crypto::crypto::DataEncoding::Armor)
+            .map_err(|e| APIError::PGP(e.to_string()))
+    }
+}
+
+impl From<String> for PublicKey {
+    fn from(value: String) -> Self {
+        Self {
+            data: value.as_bytes().to_vec(),
+        }
+    }
+}
+
+impl PrivateKey {
+    pub(crate) fn new<PGPProv: PGPProviderSync>(
+        key: &PGPProv::PrivateKey,
+        pgp_provider: &PGPProv,
+    ) -> Result<Self> {
+        let data = pgp_provider
+            .private_key_export_unlocked(key, DataEncoding::Armor)
+            .map_err(|e| APIError::PGP(e.to_string()))?;
+        Ok(Self {
+            data: data.as_ref().to_vec(),
+        })
+    }
+
+    pub(crate) fn to_pgp<PGPProv: PGPProviderSync>(
+        &self,
+        pgp_provider: &PGPProv,
+    ) -> Result<PGPProv::PrivateKey> {
+        pgp_provider
+            .private_key_import_unlocked(&self.data, DataEncoding::Armor)
+            .map_err(|e| APIError::PGP(e.to_string()))
+    }
+
+    pub(crate) fn to_public<PGPProv: PGPProviderSync>(
+        &self,
+        pgp_provider: &PGPProv,
+    ) -> Result<PublicKey> {
+        let pgp_priv = self.to_pgp(pgp_provider)?;
+        let pgp_pub = pgp_provider
+            .private_key_to_public_key(&pgp_priv)
+            .map_err(|e| APIError::PGP(e.to_string()))?;
+        PublicKey::new(&pgp_pub, pgp_provider)
+    }
+}
+
+impl From<String> for PrivateKey {
+    fn from(value: String) -> Self {
+        Self {
+            data: value.as_bytes().to_vec(),
+        }
+    }
+}
+
+impl User {
+    pub(crate) fn unlock_keys<PGPProv: PGPProviderSync>(
+        &self,
+        passphrase: &Password,
+        pgp_provider: &PGPProv,
+    ) -> Result<Vec<UnlockedUserKey>> {
+        self.Keys
+            .iter()
+            .filter(|key| key.Active && key.Primary)
+            .map(|key| {
+                let unlocked_priv_key = pgp_provider
+                    .private_key_import(&key.PrivateKey, &passphrase.0, DataEncoding::Armor)
+                    .map_err(|e| APIError::PGP(e.to_string()))?;
+                let public_key = pgp_provider
+                    .private_key_to_public_key(&unlocked_priv_key)
+                    .map_err(|e| APIError::PGP(e.to_string()))?;
+
+                Ok(UnlockedUserKey {
+                    id: key.ID.clone(),
+                    public: PublicKey::new(&public_key, pgp_provider)?,
+                    private: PrivateKey::new(&unlocked_priv_key, pgp_provider)?,
+                })
+            })
+            .collect()
+    }
 }

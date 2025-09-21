@@ -4,7 +4,7 @@ use crate::remote::payloads::{
     BlockUpload, BlockUploadRequest, BlockUploadResponse, BlockUploadVerifier,
     BlockVerificationData, CommitBlock, CommitDraftRequest, CommitDraftResponse,
     FileExtendedAttributesSchema, FileExtendedAttributesSchemaCommon,
-    FileExtendedAttributesSchemaDigest,
+    FileExtendedAttributesSchemaDigest, PrivateKey,
 };
 use crate::{
     client::crypto::Crypto,
@@ -33,7 +33,7 @@ impl Client {
         signature_email: String,
         node_key: &PGPProv::PrivateKey,
         session_key: &PGPProv::SessionKey,
-        address_key: &PGPProv::PrivateKey,
+        address_key: &PrivateKey,
         address_id: String,
         reader: Reader,
         crypto: &Crypto<PGPProv, SRPProv>,
@@ -50,6 +50,7 @@ impl Client {
         let mut manifest: Vec<u8> = vec![];
         let mut total_read: usize = 0;
         let mut blocks_sha1 = Sha1::new();
+        let address_key = address_key.to_pgp(crypto.get_pgp_provider())?; 
 
         loop {
             let buf = Self::read_n(&mut reader, FILE_CHUNK_SIZE).await?;
@@ -63,7 +64,7 @@ impl Client {
             blocks_sha1.update(&buf[..n]);
 
             let (encrypted, armored_signature) =
-                crypto.encrypt_block(session_key, node_key, address_key, &buf[..n])?;
+                crypto.encrypt_block(session_key, node_key, &address_key, &buf[..n])?;
 
             let hash = Sha256::digest(&encrypted);
 
@@ -89,7 +90,7 @@ impl Client {
             block_index += 1;
         }
 
-        let manifest_signature = crypto.sign_manifest(&manifest, address_key)?;
+        let manifest_signature = crypto.sign_manifest(&manifest, &address_key)?;
         let sha1 = hex::encode(blocks_sha1.finalize());
 
         let xattr = Self::generate_and_encrypt_xattr(
@@ -98,7 +99,7 @@ impl Client {
             &blocks,
             sha1,
             node_key,
-            address_key,
+            &address_key,
         )?;
 
         self.commit_revision(revision_uid, signature_email, manifest_signature, xattr)
@@ -161,7 +162,7 @@ impl Client {
         let upload_link = url
             .UploadLinks
             .first()
-            .ok_or(APIError::Upload("Coudln't retrieve upload url.".into()))?;
+            .ok_or(APIError::Upload("Coudln't retrieve upload url.".to_owned()))?;
 
         self.api_session
             .post_multipart_form_data(
@@ -296,7 +297,7 @@ impl Client {
         if response.Code.is_ok() {
             Ok(())
         } else {
-            Err(APIError::Upload("Failed to commit draft revision".into()))
+            Err(APIError::Upload("Failed to commit draft revision".to_owned()))
         }
     }
 }
