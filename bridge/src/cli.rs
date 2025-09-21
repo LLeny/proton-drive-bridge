@@ -69,10 +69,9 @@ pub fn run(args: Args) -> Result<()> {
         .context("failed to build Tokio runtime")?;
 
     rt.block_on(async move {
-        println!("[bridge] Loading configuration...");
         let mut cfg = Config::initialize().context("failed to load config")?;
 
-        let salted_password: Vec<u8>;
+        let salted_password: Password;
         let mut unlocked_vault: Option<UnlockedVault> = None;
 
         if crate::keyring::get_key().is_err() {
@@ -91,7 +90,7 @@ pub fn run(args: Args) -> Result<()> {
                 if let Ok(u) = cfg.drive.vault.unlock(&salted_vec) {
                     println!("[bridge] Session unlocked.");
                     unlocked_vault = Some(u);
-                    salted_password = salted_vec;
+                    salted_password = Password(salted_vec);
                     break;
                 }
 
@@ -124,6 +123,7 @@ pub fn run(args: Args) -> Result<()> {
             match refresh_from_vault(&unlocked).await {
                 Ok((t, s)) => {
                     println!("[bridge] Token refresh successful.");
+                    save_to_vault(&mut cfg, &salted_password, &t, &s)?;
                     (t, s)
                 }
                 Err(e) => {
@@ -141,7 +141,7 @@ pub fn run(args: Args) -> Result<()> {
     })
 }
 
-fn create_bridge_session_password(cfg: &Config) -> Result<Vec<u8>> {
+fn create_bridge_session_password(cfg: &Config) -> Result<Password> {
     println!("[bridge] Create bridge session password (input hidden)");
     let pass1 = prompt_password("Create bridge session password: ")?;
     let pass2 = prompt_password("Confirm bridge session password: ")?;
@@ -154,7 +154,7 @@ fn create_bridge_session_password(cfg: &Config) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!(e.to_string()))?;
     let salted = salted.as_ref().to_vec();
     crate::keyring::generate_new_key(&salted)?;
-    Ok(salted)
+    Ok(Password(salted))
 }
 
 async fn refresh_from_vault(unlocked: &UnlockedVault) -> Result<(AuthTokens, SessionStore)> {
@@ -172,7 +172,7 @@ async fn refresh_from_vault(unlocked: &UnlockedVault) -> Result<(AuthTokens, Ses
 
 async fn login_and_initialize(
     args: &Args,
-    salted_password: &[u8],
+    salted_password: &Password,
     cfg: &mut Config,
 ) -> Result<(AuthTokens, SessionStore)> {
     println!("[bridge] Authenticating with Proton (username/password)");
@@ -219,27 +219,29 @@ async fn login_and_initialize(
         .get_session_data(&crypto, &Password(password_str.into_bytes()))
         .await
         .context("failed to prepare session data")?;
-    println!("[bridge] Session prepared.");
 
-    println!("[bridge] Saving local session vault...");
+    save_to_vault(cfg, salted_password, &tokens, &session_store)?;
+
+    Ok((tokens, session_store))
+}
+
+fn save_to_vault(cfg: &mut Config, salted_password: &Password, tokens: &AuthTokens, session_store: &SessionStore) -> Result<()> {
     let unlocked = crate::vault::UnlockedVault {
         refresh: tokens.refresh.clone(),
         access: tokens.access.clone(),
         uid: tokens.uid.clone(),
         session_store: session_store.clone(),
     };
-    let locked = unlocked
-        .lock(salted_password)
-        .context("failed to lock session vault")?;
-    cfg.drive.vault = locked;
-    cfg.save().ok();
-    println!("[bridge] Session saved.");
 
-    Ok((tokens, session_store))
+    let locked = unlocked
+        .lock(salted_password.0.as_slice())
+        .context("failed to lock session vault")?;
+    
+    cfg.drive.vault = locked;
+    cfg.save()
 }
 
 async fn run_server(tokens: AuthTokens, session_store: SessionStore, args: Args) -> Result<()> {
-    println!("[bridge] Configuring FTP server...");
     let greeting = args
         .greeting
         .clone()
@@ -278,7 +280,6 @@ async fn run_server(tokens: AuthTokens, session_store: SessionStore, args: Args)
         }
     }
 
-    println!("[bridge] Building FTP server...");
     let server = server_builder
         .build()
         .context("Couldn't build FTP server")?;
