@@ -1,16 +1,15 @@
-use std::fmt;
+use crate::client::authenticator::AuthTokens;
 use crate::errors::Result;
-use reqwest::{multipart, Response};
-use serde::{de::DeserializeOwned, Serialize};
 use crate::{consts::APP_VERSION, errors::APIError};
+use reqwest::{Response, multipart};
+use serde::{Serialize, de::DeserializeOwned};
+use std::fmt;
 
 #[derive(Clone)]
 pub(crate) struct APISession {
     client: reqwest::Client,
     host_url: reqwest::Url,
-    uid: Option<String>,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
+    tokens: Option<AuthTokens>,
 }
 
 impl APISession {
@@ -18,27 +17,18 @@ impl APISession {
         Self {
             client: reqwest::Client::new(),
             host_url,
-            uid: None,
-            access_token: None,
-            refresh_token: None,
+            tokens: None,
         }
     }
 
-    pub(crate) fn set_authentication(
-        &mut self,
-        uid: String,
-        access_token: String,
-        refresh_token: String
-    ) {
-        self.uid = Some(uid);
-        self.access_token = Some(access_token);
-        self.refresh_token = Some(refresh_token);
+    pub(crate) fn set_tokens(&mut self, tokens: AuthTokens) {
+        self.tokens = Some(tokens);
     }
 
     fn url(&self, endpoint: &str) -> Result<reqwest::Url> {
         self.host_url
             .join(endpoint)
-            .map_err(|_| APIError::UrlError(endpoint.to_string()))
+            .map_err(|_| APIError::UrlError(endpoint.to_owned()))
     }
 
     pub(crate) async fn request<P>(
@@ -77,7 +67,7 @@ impl APISession {
         let response = self.request(req_type, endpoint, payload).await?;
 
         let content = response.text().await.map_err(APIError::Reqwest)?;
-
+        
         serde_json::from_str(&content)
             .map_err(|e| APIError::DeserializeJSON(format!("{:?}: {}", e, &content)))
     }
@@ -109,12 +99,13 @@ impl APISession {
 
     fn add_auth(&self, reqwest: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let mut request = reqwest.header("X-Pm-Appversion", APP_VERSION);
-        if let Some(uid) = &self.uid {
-            request = request.header("X-Pm-Uid", uid);
+
+        if let Some(tokens) = &self.tokens {
+            request = request
+                .header("X-Pm-Uid", &tokens.uid)
+                .bearer_auth(&tokens.access);
         }
-        if let Some(acc) = &self.access_token {
-            request = request.bearer_auth(acc);
-        }
+
         request
     }
 }
@@ -127,7 +118,6 @@ impl fmt::Debug for APISession {
         f.debug_struct("APISession")
             .field("client", &self.client)
             .field("host_url", &self.host_url)
-            .field("uid", &self.uid)
             .finish()
     }
 }

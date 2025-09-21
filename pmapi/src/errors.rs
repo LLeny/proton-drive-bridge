@@ -13,7 +13,7 @@ pub enum APIError {
     #[error("PGP error: {0}")]
     PGP(String),
     #[error("Salt error: {0}")]
-    Salt(#[from] proton_crypto_account::salts::SaltError),
+    Salt(String),
     #[error("Share error: {0}")]
     Share(String),
     #[error("Node error: {0}")]
@@ -37,6 +37,7 @@ pub(crate) enum ErrorCode {
     OK = 1000,
     OK_MANY = 1001,
     OK_ASYNC = 1002,
+    INVALID_INPUT = 2001,
     UNKNOWN_2002 = 2002,
     NOT_ENOUGH_PERMISSIONS = 2011,
     NOT_ENOUGH_PERMISSIONS_TO_GRANT_PERMISSIONS = 2026,

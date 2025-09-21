@@ -1,7 +1,10 @@
+use crate::client::authenticator::{AuthTokens, Password};
+use crate::consts::REFRESH_ENDPOINT;
 use crate::errors::Result;
 use crate::remote::payloads::{
-    AddressResponse, Auth, Auth2FA, Auth2FARequest, AuthInfo, AuthInfoRequest, AuthRequest,
-    GetAddressesResponse, KeySalts, User, UserResponse,
+    AddressResponse, Auth, Auth2FARequest, AuthInfo, AuthInfoRequest, AuthRequest,
+    GetAddressesResponse, KeySalts, RefreshSessionRequest, RefreshSessionResponse, User,
+    UserResponse,
 };
 use crate::{
     consts::{
@@ -9,13 +12,12 @@ use crate::{
         USERS_ENDPOINT,
     },
     errors::APIError,
-    remote::{api_session::RequestType, Client},
+    remote::{Client, api_session::RequestType},
 };
 use base64::prelude::*;
-use log::info;
 
 impl Client {
-    async fn auth_info(&self, username: &str, password: &[u8]) -> Result<Auth> {
+    async fn auth_info(&self, username: &str, password: Password) -> Result<Auth> {
         let auth_info: AuthInfo = self
             .api_session
             .request_with_json_response(
@@ -30,8 +32,7 @@ impl Client {
 
         let srp_auth = proton_srp::SRPAuth::new(
             &proton_srp::RPGPVerifier::default(),
-            str::from_utf8(password)
-                .map_err(|e| APIError::Unknown(e.to_string()))?,
+            str::from_utf8(password.0.as_slice()).map_err(|e| APIError::Unknown(e.to_string()))?,
             auth_info.Version,
             &auth_info.Salt,
             &auth_info.Modulus,
@@ -66,64 +67,62 @@ impl Client {
             .map_err(|e| APIError::Unknown(e.to_string()))?;
 
         if !proofs.compare_server_proof(server_proof.as_slice()) {
-            return Err(APIError::Unknown("Server proof verification failed".into()));
+            return Err(APIError::Unknown("Server proof verification failed".to_owned()));
         }
 
         Ok(auth)
     }
 
+    pub(crate) fn set_tokens(&mut self, auth: AuthTokens) {
+        self.api_session.set_tokens(auth);
+    }
+
     pub(crate) async fn login_auth(
         &mut self,
         username: &str,
-        password: &[u8],
-        two_fa: Option<fn() -> String>,
-    ) -> Result<()> {
+        password: Password,
+    ) -> Result<(bool, AuthTokens)> {
         let auth_info = self.auth_info(username, password).await?;
 
-        self.api_session.set_authentication(
-            auth_info.Uid,
-            auth_info.AccessToken,
-            auth_info.RefreshToken,
-        );
+        let tokens = AuthTokens::new(auth_info.AccessToken, auth_info.RefreshToken, auth_info.Uid);
 
-        if !auth_info.TwoFA.Enabled {
-            return Ok(());
+        self.set_tokens(tokens.clone());
+
+        Ok((auth_info.TwoFA.Enabled, tokens))
+    }
+
+    pub(crate) async fn send_2fa(&self, tfa: &str) -> Result<bool> {
+        let resp = self
+            .api_session
+            .request(
+                RequestType::Post,
+                AUTH_2FA_ENDPOINT,
+                Some(&Auth2FARequest { TwoFactorCode: tfa }),
+            )
+            .await?;
+
+        Ok(resp.status().is_success())
+    }
+
+    pub(crate) async fn refresh_session(&self, refresh_token: &str) -> Result<AuthTokens> {
+        let auth: RefreshSessionResponse = self
+            .api_session
+            .request_with_json_response(
+                RequestType::Post,
+                REFRESH_ENDPOINT,
+                Some(&RefreshSessionRequest::new(refresh_token.to_owned())),
+            )
+            .await?;
+
+        if auth.Code.is_error() {
+            return Err(APIError::Account("Authentication required.".to_owned()));
         }
 
-        let mut tfa_ok = false;
-
-        let tfa = two_fa.ok_or(APIError::Account(
-            "2FA enabled, requires 2FA function implemented.".to_string(),
-        ))?;
-
-        while !tfa_ok {
-            let two_fa_code = tfa();
-
-            let resp = self
-                .api_session
-                .request(
-                    RequestType::Post,
-                    AUTH_2FA_ENDPOINT,
-                    Some(&Auth2FARequest {
-                        TwoFactorCode: two_fa_code.as_str(),
-                    }),
-                )
-                .await?;
-
-            tfa_ok = resp.status().is_success();
-
-            if tfa_ok {
-                let auth_2fa_resp = resp
-                    .json::<Auth2FA>()
-                    .await
-                    .map_err(|e| APIError::DeserializeJSON(e.to_string()))?;
-                info!("Fetched 2FA auth: {auth_2fa_resp:#?}");
-            } else {
-                info!("2FA code was incorrect.");
-            }
-        }
-
-        Ok(())
+        Ok(AuthTokens {
+            refresh: auth.RefreshToken,
+            access: auth.AccessToken,
+            uid: auth.UID,
+        })
     }
 
     pub(crate) async fn get_user(&mut self) -> Result<Option<User>> {

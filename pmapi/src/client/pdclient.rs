@@ -1,3 +1,5 @@
+use crate::client::authenticator::AuthTokens;
+use crate::client::session_store::SessionStore;
 use crate::errors::Result;
 use crate::remote::payloads::{DecryptedNode, NodeType};
 use crate::{
@@ -23,92 +25,49 @@ pub struct PDClient<
 impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::srp::SRPProvider>
     PDClient<PGPProv, SRPProv>
 {
-    /// Create a new `PDClient` instance.
+    /// Creates a new Proton Drive client bound to the given authenticated session.
     ///
-    /// Initializes the remote client, cryptographic helpers and local caches using
-    /// the provided PGP and SRP providers.
+    /// Initializes the remote client with the provided `auth` tokens and prepares
+    /// cryptographic helpers and caches to interact with Proton Drive.
     ///
-    /// Arguments:
-    /// - `pgp_provider`: Implementation of `PGPProviderSync` used to handle `OpenPGP` operations.
-    /// - `srp_provider`: Implementation of `SRPProvider` used for SRP authentication.
-    pub fn new(pgp_provider: PGPProv, srp_provider: SRPProv) -> Self {
+    /// # Errors
+    ///
+    /// This constructor does not return errors.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    pub fn new(
+        pgp_provider: PGPProv,
+        srp_provider: SRPProv,
+        auth: AuthTokens,
+        session_store: SessionStore,
+    ) -> Self {
+        let mut remote_client = remote::Client::new();
+        remote_client.set_tokens(auth);
+
         Self {
-            remote_client: remote::Client::new(),
+            remote_client,
             crypto: Crypto::new(pgp_provider, srp_provider),
-            cache: Cache::new(),
+            cache: Cache::new(session_store),
             nodes: Nodes::new(),
             shares: Shares::new(),
         }
     }
 
-    /// Log in to Proton Drive and initialize crypto context and caches.
-    ///
-    /// Performs authentication (with optional 2FA), fetches user profile, salts and
-    /// addresses, and unlocks user and address keys needed to decrypt metadata.
-    ///
-    /// Arguments:
-    /// - `username`: Proton username (email or identifier).
-    /// - `password`: Proton mailbox password as a secret vector.
-    /// - `two_fa`: Optional callback invoked to retrieve a 2FA code when required.
-    ///
-    /// Returns `Ok(())` on success, or an error if authentication or initialization fails.
+    /// Retrieves the decrypted metadata for the user's My Files root folder.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - Authentication fails (invalid credentials or 2FA),
-    /// - Network or API requests fail while fetching user, salts, or addresses,
-    /// - The user cannot be retrieved after authentication,
-    /// - User or address keys cannot be unlocked/decrypted with the provided password.
-    pub async fn login(
-        &mut self,
-        username: &str,
-        password: Vec<u8>,
-        two_fa: Option<fn() -> String>,
-    ) -> Result<()> {
-        self.remote_client
-            .login_auth(username, &password, two_fa)
-            .await?;
-
-        self.crypto.set_password(password);
-
-        let user = self
-            .remote_client
-            .get_user()
-            .await?
-            .ok_or(APIError::Account("Couldn't retrieve user.".into()))?;
-
-        self.cache.set_user(user);
-
-        self.cache.set_salt(self.remote_client.get_salts().await?);
-        self.remote_client
-            .get_addresses()
-            .await?
-            .into_iter()
-            .for_each(|a| self.cache.add_address(a));
-
-        self.crypto.unlock_user_keys(&self.cache)?;
-        self.crypto.unlock_address_keys(&self.cache)?;
-
-        Ok(())
-    }
-
-    /// Get the root folder node of "My files".
     ///
-    /// Resolves the "My files" share and returns its root as a high-level `Node`.
-    ///
-    /// Returns the root node on success or an error if it cannot be resolved or decrypted.
-    ///
-    /// # Errors
-    /// Returns an error if:
-    /// - The "My files" share IDs cannot be retrieved (network/API error),
-    /// - The root node cannot be fetched or decrypted.
+    /// Returns an error if fetching identifiers, nodes, or decrypting metadata fails,
+    /// or if the remote API returns an error.
     pub async fn get_myfiles_root_folder(&self) -> Result<Node> {
         let ids = self
             .shares
             .get_myfiles_ids(&self.cache, &self.crypto, &self.remote_client)
             .await?;
         let node_uid = make_node_uid(&ids.VolumeID, &ids.RootNodeId);
-        let mut nodes = self
+        let nodes = self
             .nodes
             .get_nodes(
                 vec![node_uid],
@@ -117,23 +76,23 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
                 &self.remote_client,
             )
             .await?;
-        Ok(nodes.remove(0).into())
+        nodes
+            .into_iter()
+            .next()
+            .map(std::convert::Into::into)
+            .ok_or(APIError::Node("Node not found.".to_owned()))
     }
 
-    /// Fetch a single node by its UID.
-    ///
-    /// Decrypts the node metadata and returns a high-level `Node` wrapper.
-    ///
-    /// Arguments:
-    /// - `node_uid`: Combined UID of the node (volume ID + node ID).
+    /// Retrieves the decrypted metadata for a specific node.
     ///
     /// # Errors
-    /// Returns an error if the node cannot be fetched or its metadata cannot be decrypted.
+    ///
+    /// Returns an error if fetching the node from the API fails or if decryption fails.
     pub async fn get_node(&self, node_uid: &str) -> Result<Node> {
         let node = self
             .nodes
             .get_single_node(
-                node_uid.to_string(),
+                node_uid.to_owned(),
                 &self.cache,
                 &self.crypto,
                 &self.remote_client,
@@ -142,22 +101,16 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         Ok(node.into())
     }
 
-    /// Rename a node.
-    ///
-    /// Updates the node name server-side and refreshes the local cache with the
-    /// newly decrypted node metadata.
-    ///
-    /// Arguments:
-    /// - `node_uid`: UID of the node to rename.
-    /// - `new_name`: The new display name for the node.
+    /// Renames a node to `new_name`.
     ///
     /// # Errors
-    /// Returns an error if the rename request fails, or if the updated node cannot be
-    /// fetched or decrypted to refresh the cache.
+    ///
+    /// Returns an error if the rename operation fails remotely or if the node cannot
+    /// be re-fetched/decrypted after the rename.
     pub async fn rename_node(&mut self, node_uid: &str, new_name: &str) -> Result<()> {
         self.nodes
             .rename_single_node(
-                node_uid.to_string(),
+                node_uid.to_owned(),
                 new_name,
                 &self.cache,
                 &self.crypto,
@@ -170,17 +123,12 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         Ok(())
     }
 
-    /// Create a folder under a parent node.
-    ///
-    /// Arguments:
-    /// - `parent_node_uid`: UID of the parent folder.
-    /// - `folder_name`: Name of the new folder.
-    ///
-    /// Returns the created folder as a `Node`.
+    /// Creates a new folder with `folder_name` inside the folder identified by `parent_node_uid`.
     ///
     /// # Errors
-    /// Returns an error if the parent cannot be fetched/decrypted, if folder creation
-    /// fails on the server, or if the created folder cannot be fetched/decrypted.
+    ///
+    /// Returns an error if the parent node cannot be retrieved, if creating the folder fails,
+    /// or if the new folder cannot be fetched/decrypted.
     pub async fn create_folder(&self, parent_node_uid: String, folder_name: &str) -> Result<Node> {
         let parent = self
             .nodes
@@ -205,16 +153,11 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         Ok(folder)
     }
 
-    /// List the children of a folder.
-    ///
-    /// Arguments:
-    /// - `parent_uid`: UID of the parent folder.
-    ///
-    /// Returns all direct child nodes (files and subfolders).
+    /// Lists children of the specified folder.
     ///
     /// # Errors
-    /// Returns an error if the children cannot be listed or their metadata cannot be
-    /// decrypted.
+    ///
+    /// Returns an error if fetching or decrypting child nodes fails.
     pub async fn folder_children(&self, parent_uid: &str) -> Result<Vec<Node>> {
         Ok(self
             .nodes
@@ -225,27 +168,20 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .collect())
     }
 
-    /// Create a downloader for a file node.
-    ///
-    /// Validates that the referenced node is a file with an active revision and a
-    /// session key, then prepares a `FileDownloader` configured with the proper
-    /// session and verification keys for streaming the file contents.
-    ///
-    /// Arguments:
-    /// - `node_uid`: UID of the file node to download.
+    /// Builds a downloader for the specified file node.
     ///
     /// # Errors
+    ///
     /// Returns an error if:
-    /// - The node cannot be fetched or decrypted,
-    /// - The node is not a file,
-    /// - The node has no active revision,
-    /// - The node has no session key,
-    /// - Session or verification keys cannot be exported by the crypto provider.
+    /// - The node is not a file.
+    /// - The node has no active revision or session key.
+    /// - Exporting cryptographic material fails.
+    /// - Any remote API call fails.
     pub async fn get_node_downloader(&self, node_uid: &str) -> Result<FileDownloader> {
         let node = self
             .nodes
             .get_single_node(
-                node_uid.to_string(),
+                node_uid.to_owned(),
                 &self.cache,
                 &self.crypto,
                 &self.remote_client,
@@ -278,9 +214,12 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         let session_key = node
             .content_session_key
             .as_ref()
-            .ok_or(APIError::Node("Couldn't find session key.".to_string()))?;
+            .ok_or(APIError::Node("Couldn't find session key.".to_owned()))?;
         let session_key = self.crypto.export_session_key(session_key)?;
-        let verification_key = self.crypto.export_public_key(&node.name_verification_key)?;
+        let pgp_verification_key = node
+            .name_verification_key
+            .to_pgp(self.crypto.get_pgp_provider())?;
+        let verification_key = self.crypto.export_public_key(&pgp_verification_key)?;
 
         let mut buff: Vec<u8> = vec![];
         buff.extend(session_key.as_ref());
@@ -300,21 +239,12 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         Ok(downloader)
     }
 
-    /// Upload a file into a folder.
-    ///
-    /// Encrypts and uploads the data from the provided async reader to the remote
-    /// service as a new file under the given parent folder.
-    ///
-    /// Arguments:
-    /// - `parent_node_uid`: UID of the parent folder.
-    /// - `file_name`: Destination file name.
-    /// - `reader`: Async reader providing the file's bytes.
-    ///
-    /// Returns the number of bytes successfully uploaded.
+    /// Uploads a file into the given parent folder, streaming from `reader`.
     ///
     /// # Errors
-    /// Returns an error if the upload fails due to network/API issues, encryption
-    /// or key-handling errors, or if the parent folder is invalid/inaccessible.
+    ///
+    /// Returns an error if preparing the upload, encrypting blocks, or any remote API
+    /// operation fails.
     pub async fn upload_file<R>(
         &self,
         parent_node_uid: String,
@@ -336,16 +266,13 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .await
     }
 
-    /// Delete multiple nodes by UID.
+    /// Deletes the nodes identified by `node_uids` and updates the cache accordingly.
     ///
-    /// Arguments:
-    /// - `node_uids`: UIDs of nodes to delete.
-    ///
-    /// Returns a list of failures as `(uid, reason)` tuples. Any node not listed
-    /// in the returned vector was successfully deleted and is pruned from the cache.
+    /// Returns the list of failures as `(uid, error_message)` tuples.
     ///
     /// # Errors
-    /// Returns an error if the delete request fails.
+    ///
+    /// Returns an error if the deletion request fails remotely.
     pub async fn delete_nodes(&mut self, node_uids: Vec<String>) -> Result<Vec<(String, String)>> {
         let failed = self.remote_client.delete_nodes(&node_uids).await?;
 

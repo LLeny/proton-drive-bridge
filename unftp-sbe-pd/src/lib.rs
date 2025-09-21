@@ -1,10 +1,10 @@
-pub mod ext;
-
 use async_trait::async_trait;
 use libunftp::auth::UserDetail;
 use libunftp::storage::{Error, ErrorKind, Fileinfo, Metadata, Result, StorageBackend};
 use log::info;
+use pmapi::client::authenticator::AuthTokens;
 use pmapi::client::pdclient::{Node, PDClient, TypeNode};
+use pmapi::client::session_store::SessionStore;
 use pmapi::remote::downloader::FileDownloader;
 use proton_crypto::crypto::PGPProviderSync;
 use proton_crypto::srp::SRPProvider;
@@ -217,9 +217,8 @@ where
                 ErrorKind::FileNameNotAllowedError,
                 "Couldn't identify file name",
             ))?
-            .to_str()
-            .unwrap()
-            .to_string();
+            .to_string_lossy()
+            .into_owned();
 
         let parent_folder = path
             .parent()
@@ -227,9 +226,8 @@ where
                 ErrorKind::FileNameNotAllowedError,
                 "Couldn't identify parent folder name",
             ))?
-            .to_str()
-            .unwrap()
-            .to_string();
+            .to_string_lossy()
+            .into_owned();
 
         let parent_node = self.get_node_from_path(parent_folder).await?;
 
@@ -245,47 +243,30 @@ where
     PGPProv: PGPProviderSync + Send + 'static,
     SRPProv: SRPProvider + Send + 'static,
 {
-    /// Create a new `ProtonDriveStorage` and log in to Proton Drive.
+    /// Creates a new storage backend connected to Proton Drive.
     ///
-    /// Establishes a `PDClient`, performs a blocking login (including optional 2FA),
-    /// and starts a background worker thread used to service storage operations.
-    ///
-    /// Arguments:
-    /// - `pgp_provider`: Implementation of `PGPProviderSync` for `OpenPGP` operations.
-    /// - `srp_provider`: Implementation of `SRPProvider` for SRP authentication.
-    /// - `username`: Proton username (email or identifier).
-    /// - `password`: Proton mailbox password as a UTF‑8 string.
-    /// - `two_fa`: Optional callback invoked to retrieve a 2FA code when required.
-    ///
-    /// Returns a ready-to-use storage backend on success.
+    /// Spawns a background worker thread to drive the Proton Drive client and
+    /// returns a handle that implements `StorageBackend` for libunftp.
     ///
     /// # Errors
-    /// Returns an error if authentication or initialization fails (e.g., invalid
-    /// credentials/2FA, network/API failures while fetching user data or keys). The
-    /// underlying error is mapped to `ErrorKind::ConnectionClosed`.
+    ///
+    /// Currently this function always returns `Ok`. The `Result` is reserved for
+    /// potential initialization failures in the future.
     ///
     /// # Panics
-    /// Panics if the background worker thread cannot be spawned.
+    ///
+    /// Panics if spawning the background worker thread fails.
     pub fn new(
         pgp_provider: PGPProv,
         srp_provider: SRPProv,
-        username: &str,
-        password: &str,
-        two_fa: Option<fn() -> String>,
+        auth: AuthTokens,
+        session_store: SessionStore,
     ) -> Result<Self> {
-        let mut pm_client = PDClient::new(pgp_provider, srp_provider);
-        let password = password.as_bytes().to_vec();
+        let pm_client = PDClient::new(pgp_provider, srp_provider, auth, session_store);
         let (pm_tx, pm_rx) = mpsc::channel::<PDCommand>(64);
 
-        block_on(async {
-            pm_client
-                .login(username, password, two_fa)
-                .await
-                .map_err(|e| Error::new(ErrorKind::ConnectionClosed, e))
-        })?;
-
         std::thread::Builder::new()
-            .name("pdclient-worker".into())
+            .name("pdclient-worker".to_owned())
             .spawn(move || run_pdclient_worker(pm_client, pm_rx))
             .expect("spawn pdclient-worker thread");
 
@@ -299,8 +280,8 @@ where
     }
 
     async fn get_child(&self, parent_uid: &str, node_name: &str) -> Result<Node> {
-        info!("ge_child: {parent_uid:?} {node_name:?}");
-        let child = send_folder_children(&self.pm_tx, parent_uid.to_string())
+        info!("get_child: {parent_uid:?} {node_name:?}");
+        let child = send_folder_children(&self.pm_tx, parent_uid.to_owned())
             .await?
             .into_iter()
             .find(|c| c.name == node_name)
@@ -561,7 +542,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> std::fmt::Debug
 }
 
 fn path_string(path: &Path) -> String {
-    path.to_str().unwrap_or(ROOT_PATH).to_string()
+    path.to_str().unwrap_or(ROOT_PATH).to_owned()
 }
 
 fn run_pdclient_worker<PGPProv, SRPProv>(
@@ -645,11 +626,4 @@ fn run_pdclient_worker<PGPProv, SRPProv>(
             }
         }
     });
-}
-
-fn block_on<F, T>(future: F) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    futures::executor::block_on(future)
 }

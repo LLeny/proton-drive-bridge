@@ -62,7 +62,7 @@ async fn fetch_and_decrypt_block(
     let url = block
         .URL
         .as_ref()
-        .ok_or_else(|| APIError::Download("Missing block URL".into()))?;
+        .ok_or_else(|| APIError::Download("Missing block URL".to_owned()))?;
 
     let encrypted_block = session
         .request::<()>(RequestType::Get, url, None)
@@ -75,7 +75,7 @@ async fn fetch_and_decrypt_block(
     let sha = sha2::Sha256::digest(&encrypted_block);
     let integrity = base64::prelude::BASE64_STANDARD.encode(sha) == block.Hash;
     if !integrity {
-        return Err(APIError::Download("Block integrity check failed".into()));
+        return Err(APIError::Download("Block integrity check failed".to_owned()));
     }
 
     let pgp_provider = proton_crypto::new_pgp_provider();
@@ -152,7 +152,7 @@ async fn fetch_all_revision_blocks(
         from_block_index += blocks_len;
     }
 
-    results.ok_or_else(|| APIError::Download("No revision found".into()))
+    results.ok_or_else(|| APIError::Download("No revision found".to_owned()))
 }
 
 fn build_revision_url(volume_id: &str, node_id: &str, revision_id: &str) -> String {

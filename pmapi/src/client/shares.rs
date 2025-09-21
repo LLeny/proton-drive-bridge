@@ -1,12 +1,12 @@
 use std::{fmt::Debug, marker::PhantomData};
 
 use crate::errors::Result;
+use crate::remote::payloads::UnlockedUserKey;
 use crate::{
     client::{cache::Cache, crypto::Crypto},
     remote::payloads::{DecryptedRootShare, EncryptedRootShare, Volume, VolumeShareNodeIDs},
 };
 use proton_crypto::{crypto::PGPProviderSync, srp::SRPProvider};
-use proton_crypto_account::keys::UnlockedUserKey;
 
 pub(crate) struct Shares<PGPProv: PGPProviderSync, SRPPRov: SRPProvider> {
     _pgp: PhantomData<PGPProv>,
@@ -26,7 +26,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     fn insert_share_cache(
         encrypted_share: &EncryptedRootShare,
         share: &DecryptedRootShare,
-        key: UnlockedUserKey<PGPProv>,
+        key: UnlockedUserKey,
         cache: &Cache<PGPProv>,
     ) {
         cache.add_share_key(share.ShareID.clone(), key);
@@ -64,7 +64,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         cache
             .myfiles_ids()
             .ok_or(crate::errors::APIError::Account(
-                "My files IDs not initialized".into(),
+                "My files IDs not initialized".to_owned(),
             ))
     }
 }

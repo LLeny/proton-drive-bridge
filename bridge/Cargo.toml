@@ -1,9 +1,10 @@
 [package]
 name = "proton-drive-bridge"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+unftp-sbe-pd = { path = "../unftp-sbe-pd" }
 tokio = { workspace = true }
 log = { workspace = true }
 pmapi = { path = "../pmapi" }
@@ -13,10 +14,22 @@ env_logger = { version = "0.11.8", default-features = false, features = [
 ] }
 proton-crypto = { workspace = true }
 libunftp = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+strum = { workspace = true }
 unftp-auth-jsonfile = { git = "https://github.com/LLeny/libunftp.git", branch = "mlsd" }
-unftp-sbe-pd = { path = "../unftp-sbe-pd" }
 clap = { version = "4.5.47", features = ["derive", "env"] }
 anyhow = { version = "1.0.72" }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+dirs = { version = "6.0.0" }
+iced = { version = "0.13.1", features = ["advanced", "tokio", "lazy" ] }
+iced_aw = { version = "0.12.2", default-features = false, features = ["number_input"]}
+iced_table = { version = "0.13.0", git = "https://github.com/tarkah/iced_table.git" }
+rfd = { version = "0.15.4" }
+rpassword = { version = "7.3.1" }
 
 [lints]
 workspace = true

@@ -48,25 +48,43 @@ The binary will be available at `target/release/proton-drive-bridge`
 ### Command Line
 
 ```bash
-proton-drive-bridge [OPTIONS]
+proton-drive-bridge --cli [OPTIONS]
 ```
 
 #### Options:
 - `-u, --username <USERNAME>`: Proton account email (or set `PROTON_USERNAME` environment variable)
 - `-p, --password <PASSWORD>`: Proton account password (or set `PROTON_PASSWORD` environment variable)
 - `--auth-file <AUTH_FILE>`: Path to JSON file containing user credentials (default: "users.json")
-- `--bind <BIND>`: IP address to bind to (default: 0.0.0.0)
 - `--port <PORT>`: Port to listen on (default: 2121)
 - `--greeting <GREETING>`: Server greeting message
 - `--tls`: Enable FTPS (requires certificate and key)
 - `--cert <CERT>`: Path to certificate file (PEM format, required with --tls)
 - `--key <KEY>`: Path to private key file (PEM format, required with --tls)
+- `-c, --cli`: Run in CLI mode (no UI). Short form `-c` is accepted.
+
+Notes:
+- In CLI mode, if `--username/--password` (or `PROTON_USERNAME/PROTON_PASSWORD`) are not provided, you will be prompted interactively on stdin.
+- When using `--tls`, both `--cert` and `--key` must be provided.
 
 ### Example
 
 ```bash
-proton-drive-bridge -u ftpusername --port 2121
+proton-drive-bridge --cli -u ftpusername --port 2121
 ```
+
+With environment variables:
+
+```bash
+PROTON_USERNAME=you@example.com PROTON_PASSWORD='yourpass' proton-drive-bridge --cli --port 2121
+```
+
+### Bridge Session Password (CLI)
+
+When running with `--cli`, the application maintains a local encrypted "bridge session" vault so you don’t have to re-enter your Proton username/password every time:
+
+- On first run, you will be prompted to create a bridge session password. This password is used to derive a salted key that encrypts your local session vault (which stores access/refresh tokens and session data). The input is hidden (no echo).
+- On subsequent runs, you’ll be prompted only for this bridge session password (hidden). The app will unlock the vault and refresh your Proton tokens automatically. If refresh fails, it falls back to a full login and updates the vault.
+- To reset the saved session, delete the key from your OS keyring and/or remove the app’s config file (location depends on your OS), then run again to create a new session.
 
 ## User Authentication
 
@@ -105,7 +123,7 @@ Details in the unftp_auth_jsonfile documentation: https://docs.rs/unftp-auth-jso
 
 Specify a custom users file:
 ```bash
-proton-drive-bridge --auth-file /path/to/users.json
+proton-drive-bridge --cli --auth-file /path/to/users.json
 ```
 
 ### Environment Variables

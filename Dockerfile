@@ -1,4 +1,4 @@
-FROM rust:1.89-slim-trixie AS build
+FROM rust:1.90-slim-trixie AS build
 
 RUN USER=root cargo new --bin proton-drive-bridge
 RUN apt-get update && apt-get -y --no-install-recommends install pkg-config libssl-dev libsodium-dev golang clang
