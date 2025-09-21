@@ -13,6 +13,8 @@ use std::{fmt::Debug, path::Path};
 use tokio::sync::{mpsc, oneshot};
 
 const ROOT_PATH: &str = "/";
+const PHOTOS_PATH: &str = "/photos";
+const READONLY_PATHS: [&str; 2] = [ROOT_PATH, PHOTOS_PATH];
 
 type UploadReader = Box<dyn tokio::io::AsyncRead + Send + Sync + Unpin + 'static>;
 
@@ -122,6 +124,13 @@ where
         P: AsRef<Path> + Send + Debug,
     {
         info!("Delete: {:?}", &path);
+        if is_readonly(path.as_ref()) {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                format!("Path '{path:?}' is readonly"),
+            ));
+        }
+
         self.delete_by_path(path).await
     }
 
@@ -130,6 +139,13 @@ where
         P: AsRef<Path> + Send + Debug,
     {
         info!("Delete directory: {:?}", &path);
+        if is_readonly(path.as_ref()) {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                format!("Path '{path:?}' is readonly"),
+            ));
+        }
+
         self.delete_by_path(path).await
     }
 
@@ -145,6 +161,13 @@ where
         P: AsRef<Path> + Send + Debug,
     {
         info!("Rename {from:?} to {to:?}");
+        if is_readonly(from.as_ref()) {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                format!("Path '{from:?}' is readonly"),
+            ));
+        }
+
         let node = self.get_node_from_path(from.as_ref(), false).await?;
         let new_name = to
             .as_ref()
@@ -357,6 +380,13 @@ where
     where
         P: AsRef<Path> + Send + Debug,
     {
+        if is_readonly(path.as_ref()) {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                format!("Path '{path:?}' is readonly"),
+            ));
+        }
+
         let node = self.get_node_from_path(path.as_ref(), false).await?;
         let failed = send_delete_nodes(&self.pm_tx, vec![node.uid]).await?;
         if failed.is_empty() {
@@ -365,6 +395,17 @@ where
             Err(Error::new(ErrorKind::LocalError, failed[0].1.clone()))
         }
     }
+}
+
+fn is_readonly<P>(path: P) -> bool
+where
+    P: AsRef<Path>,
+{
+    path.as_ref()
+        //.canonicalize() //TODO: without hitting local FS...
+        .to_str()
+        .map(str::to_lowercase)
+        .is_none_or(|lower| READONLY_PATHS.contains(&lower.as_str()))
 }
 
 enum PDCommand {
