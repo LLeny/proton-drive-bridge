@@ -179,7 +179,7 @@ async fn login_and_initialize(
     let username = if let Some(u) = args.username.clone() {
         u
     } else {
-        prompt_stdin("Proton username (email): ")?
+        prompt_stdin("Proton username: ")?
             .trim()
             .to_string()
     };
