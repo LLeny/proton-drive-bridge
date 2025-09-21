@@ -2,13 +2,26 @@ mod config;
 mod keyring;
 mod vault;
 mod app;
+mod cli;
 
 use crate::app::App;
 
 const APP_NAME: &str = "pdrive-bridge";
 
+use clap::Parser;
+use crate::cli::Args;
+
 fn main() -> iced::Result {
     env_logger::init();
+
+    let args = Args::parse();
+
+    if args.cli {
+        if let Err(e) = cli::run(args) {
+            eprintln!("error: {e:#}");
+        }
+        return Ok(());
+    }
 
     iced::application("Proton Drive FTP bridge", App::update, App::view)
         .antialiasing(true)
