@@ -1,6 +1,6 @@
 [package]
 name = "pmapi"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "An API to access files on Proton Drive"
 authors = [ "https://github.com/LLeny" ]
