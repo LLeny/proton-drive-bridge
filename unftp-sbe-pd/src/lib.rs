@@ -45,7 +45,7 @@ where
         P: AsRef<Path> + Send + Debug,
     {
         info!("Metadata: {:?}", &path);
-        let node = self.get_node_from_path(path).await?;
+        let node = self.get_node_from_path(path, false).await?;
         Ok(node.into())
     }
 
@@ -55,7 +55,7 @@ where
         <Self as StorageBackend<User>>::Metadata: Metadata,
     {
         info!("List: {:?}", &path);
-        let node = self.get_node_from_path(path.as_ref()).await?;
+        let node = self.get_node_from_path(path.as_ref(), false).await?;
 
         if !matches!(node.node_type, TypeNode::Folder(_)) {
             return Err(Error::new(
@@ -145,7 +145,7 @@ where
         P: AsRef<Path> + Send + Debug,
     {
         info!("Rename {from:?} to {to:?}");
-        let node = self.get_node_from_path(from.as_ref()).await?;
+        let node = self.get_node_from_path(from.as_ref(), false).await?;
         let new_name = to
             .as_ref()
             .file_name()
@@ -190,7 +190,7 @@ where
             .to_string_lossy()
             .into_owned();
 
-        let parent_node = self.get_node_from_path(parent_folder).await?;
+        let parent_node = self.get_node_from_path(parent_folder, true).await?;
 
         let _ = send_create_folder(&self.pm_tx, parent_node.uid, folder_name).await?;
         Ok(())
@@ -229,7 +229,7 @@ where
             .to_string_lossy()
             .into_owned();
 
-        let parent_node = self.get_node_from_path(parent_folder).await?;
+        let parent_node = self.get_node_from_path(parent_folder, true).await?;
 
         let sent =
             send_upload_file(&self.pm_tx, parent_node.uid, file_name, Box::new(reader)).await?;
@@ -292,7 +292,11 @@ where
         Ok(child)
     }
 
-    pub(crate) async fn get_node_from_path<P>(&self, path: P) -> Result<Node>
+    pub(crate) async fn get_node_from_path<P>(
+        &self,
+        path: P,
+        create_if_inexistent: bool,
+    ) -> Result<Node>
     where
         P: AsRef<Path> + Send + Debug,
     {
@@ -312,7 +316,21 @@ where
 
         for next_node_name in &split_path {
             info!("split path: {next_node_name:?}");
-            current_node = self.get_child(&current_node.uid, next_node_name).await?;
+            current_node = match self.get_child(&current_node.uid, next_node_name).await {
+                Ok(n) => n,
+                Err(e) => {
+                    if create_if_inexistent {
+                        send_create_folder(
+                            &self.pm_tx,
+                            current_node.uid.clone(),
+                            next_node_name.clone(),
+                        )
+                        .await?
+                    } else {
+                        return Err(e);
+                    }
+                }
+            };
             info!("child: {current_node:?}");
         }
 
@@ -323,7 +341,7 @@ where
     where
         P: AsRef<Path> + Send + Debug,
     {
-        let node = self.get_node_from_path(path.as_ref()).await?;
+        let node = self.get_node_from_path(path.as_ref(), false).await?;
 
         if !matches!(node.node_type, TypeNode::File(_)) {
             return Err(Error::new(
@@ -339,7 +357,7 @@ where
     where
         P: AsRef<Path> + Send + Debug,
     {
-        let node = self.get_node_from_path(path.as_ref()).await?;
+        let node = self.get_node_from_path(path.as_ref(), false).await?;
         let failed = send_delete_nodes(&self.pm_tx, vec![node.uid]).await?;
         if failed.is_empty() {
             Ok(())
