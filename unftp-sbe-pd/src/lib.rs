@@ -217,9 +217,8 @@ where
                 ErrorKind::FileNameNotAllowedError,
                 "Couldn't identify file name",
             ))?
-            .to_str()
-            .unwrap()
-            .to_owned();
+            .to_string_lossy()
+            .into_owned();
 
         let parent_folder = path
             .parent()
@@ -227,9 +226,8 @@ where
                 ErrorKind::FileNameNotAllowedError,
                 "Couldn't identify parent folder name",
             ))?
-            .to_str()
-            .unwrap()
-            .to_owned();
+            .to_string_lossy()
+            .into_owned();
 
         let parent_node = self.get_node_from_path(parent_folder).await?;
 

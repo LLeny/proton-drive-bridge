@@ -67,7 +67,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .get_myfiles_ids(&self.cache, &self.crypto, &self.remote_client)
             .await?;
         let node_uid = make_node_uid(&ids.VolumeID, &ids.RootNodeId);
-        let mut nodes = self
+        let nodes = self
             .nodes
             .get_nodes(
                 vec![node_uid],
@@ -76,7 +76,11 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
                 &self.remote_client,
             )
             .await?;
-        Ok(nodes.remove(0).into())
+        nodes
+            .into_iter()
+            .next()
+            .map(std::convert::Into::into)
+            .ok_or(APIError::Node("Node not found.".to_owned()))
     }
 
     /// Retrieves the decrypted metadata for a specific node.

@@ -93,7 +93,6 @@ impl SessionStore {
     }
 
     pub(crate) fn addresses(&self) -> Vec<&AddressResponse> {
-        let addrs: Vec<&AddressResponse> = self.addresses.iter().by_ref().collect();
-        addrs
+        self.addresses.iter().collect()
     }
 }

@@ -108,8 +108,9 @@ impl ServerPage {
             event: evt,
         });
 
-        while self.table.rows.len() > MAX_ROW_COUNT {
-            self.table.rows.remove(0);
+        if self.table.rows.len() > MAX_ROW_COUNT {
+            let excess = self.table.rows.len() - MAX_ROW_COUNT;
+            self.table.rows.drain(0..excess);
         }
     }
 }
@@ -281,7 +282,7 @@ async fn run_ftp_server_worker(
     }
 
     let Ok(server) = server_builder.build() else {
-        error!("Coudln't build FTP server");
+        error!("Couldn't build FTP server");
         return;
     };
 

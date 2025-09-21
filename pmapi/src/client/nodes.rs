@@ -64,10 +64,12 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         crypto: &'c Crypto<PGPProv, SRPProv>,
         remote_client: &'c crate::remote::Client,
     ) -> Result<&'c DecryptedNode<PGPProv>> {
-        Ok(self
+        self
             .get_nodes(vec![node_uid], cache, crypto, remote_client)
             .await?
-            .remove(0))
+            .into_iter()
+            .next()
+            .ok_or(APIError::Node("Node not found.".to_owned()))
     }
 
     pub(crate) async fn get_node_children<'c>(

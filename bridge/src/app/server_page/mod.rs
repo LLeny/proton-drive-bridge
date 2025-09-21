@@ -141,28 +141,17 @@ impl Page for ServerPage {
             }),
             match &self.server_events_rx {
                 Some(rx_mutex) => {
-                    struct MySubscription;
-                    let id = TypeId::of::<MySubscription>();
                     let rx_mutex = rx_mutex.clone();
                     iced::Subscription::run_with_id(
-                        id,
+                        TypeId::of::<ServerPage>(),
                         iced::stream::channel(4, move |mut channel| async move {
-                            loop {
-                                let msg_opt = {
-                                    let mut rx = rx_mutex.lock().await;
-                                    rx.recv().await
-                                };
-                                if let Some(msg) = msg_opt {
-                                    let _ = channel
-                                        .send(Message::ServerPageMsg(
-                                            crate::app::server_page::ServerPageMessage::ServerEvent(
-                                                msg,
-                                            ),
-                                        ))
-                                        .await;
-                                } else {
-                                    break;
-                                }
+                            let mut rx = rx_mutex.lock().await;
+                            while let Some(msg) = rx.recv().await {
+                                let _ = channel
+                                    .send(Message::ServerPageMsg(
+                                        ServerPageMessage::ServerEvent(msg),
+                                    ))
+                                    .await;
                             }
                         }),
                     )

@@ -69,8 +69,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
         let salt = salts
             .KeySalts
             .iter()
-            .filter(|s| s.KeySalt.is_some())
-            .nth(0)
+            .find(|s| s.KeySalt.is_some())
             .ok_or(APIError::Account("No salts available".to_owned()))?;
 
         let vecsalt = salt
@@ -113,12 +112,12 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
 
         let priv_keys: Vec<PGPProv::PrivateKey> = user_keys
             .iter()
-            .map(|k| k.private.to_pgp(&self.pgp_provider).unwrap())
-            .collect();
+            .map(|k| k.private.to_pgp(&self.pgp_provider))
+            .collect::<Result<_>>()?;
         let pub_keys: Vec<PGPProv::PublicKey> = user_keys
             .iter()
-            .map(|k| k.public.to_pgp(&self.pgp_provider).unwrap())
-            .collect();
+            .map(|k| k.public.to_pgp(&self.pgp_provider))
+            .collect::<Result<_>>()?;
 
         #[allow(clippy::type_complexity)]
         let addresses_info: Vec<(String, Vec<(String, String, String, String)>)> = store
@@ -204,12 +203,12 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
 
         let pub_keys: Vec<PGPProv::PublicKey> = addr_keys
             .iter()
-            .map(|k| k.public.to_pgp(&self.pgp_provider).unwrap())
-            .collect();
+            .map(|k| k.public.to_pgp(&self.pgp_provider))
+            .collect::<Result<_>>()?;
         let pri_keys: Vec<PGPProv::PrivateKey> = addr_keys
             .iter()
-            .map(|k| k.private.to_pgp(&self.pgp_provider).unwrap())
-            .collect();
+            .map(|k| k.private.to_pgp(&self.pgp_provider))
+            .collect::<Result<_>>()?;
 
         let passphrase = self
             .pgp_provider
@@ -366,8 +365,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             hash_key,
         })
     }
-
-    //TODO: Verify
+    
     pub(crate) fn decrypt_content_key(
         &self,
         content_key_packet: impl AsRef<[u8]>,
@@ -613,8 +611,10 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             .finalize_with_detached_signature()
             .map_err(|e| APIError::PGP(format!("Couldn't encrypt passphrase: {e}")))?;
 
-        let encrypted_passphrase = String::from_utf8(encrypted_passphrase).unwrap();
-        let passphrase_signature = String::from_utf8(detached_signature).unwrap();
+        let encrypted_passphrase = String::from_utf8(encrypted_passphrase)
+            .map_err(|e| APIError::PGP(format!("Couldn't parse encrypted passphrase as UTF-8: {e}")))?;
+        let passphrase_signature = String::from_utf8(detached_signature)
+            .map_err(|e| APIError::PGP(format!("Couldn't parse passphrase signature as UTF-8: {e}")))?;
 
         let armored_key_data = self
             .pgp_provider
@@ -627,7 +627,8 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             EncryptedNodeCrypto {
                 SignatureEmail: Some(user.Email.clone()),
                 NameSignatureEmail: Some(user.Email.clone()),
-                ArmoredKey: String::from_utf8(armored_key_data).unwrap(),
+                ArmoredKey: String::from_utf8(armored_key_data)
+                    .map_err(|e| APIError::PGP(format!("Couldn't parse armored key as UTF-8: {e}")))?,
                 ArmoredNodePassphrase: encrypted_passphrase,
                 ArmoredNodePassphraseSignature: passphrase_signature,
                 File: None,
@@ -884,7 +885,7 @@ impl PublicKey {
         pgp_provider: &PGPProv,
     ) -> Result<Self> {
         let data = pgp_provider
-            .public_key_export(key, DataEncoding::Armor)
+            .public_key_export(key, proton_crypto::crypto::DataEncoding::Armor)
             .map_err(|e| APIError::PGP(e.to_string()))?;
         Ok(Self {
             data: data.as_ref().to_vec(),
