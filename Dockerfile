@@ -1,7 +1,7 @@
 FROM rust:1.90-slim-trixie AS build
 
 RUN USER=root cargo new --bin proton-drive-bridge
-RUN apt-get update && apt-get -y --no-install-recommends install pkg-config libssl-dev libsodium-dev golang clang
+RUN apt-get update && apt-get -y --no-install-recommends install pkg-config libdbus-1-dev libssl-dev libsodium-dev golang clang
 RUN update-ca-certificates
 
 WORKDIR /app
@@ -19,7 +19,7 @@ COPY users.json ./
 RUN RUSTFLAGS='-C target-cpu=native' cargo build --locked --target-dir ./build --release
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get -y --no-install-recommends install ca-certificates libsodium23 && apt-get clean autoclean && rm -rf /var/lib/{apt,dpkg,cache,log}/
+RUN apt-get update && apt-get -y --no-install-recommends install ca-certificates libsodium23 libdbus-1-3 && apt-get clean autoclean && rm -rf /var/lib/{apt,dpkg,cache,log}/
 COPY --from=build /app/build/release/proton-drive-bridge /usr/bin/proton-drive-bridge
 COPY --from=build /app/users.json /app/
 
