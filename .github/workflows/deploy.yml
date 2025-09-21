@@ -14,7 +14,7 @@ jobs:
           uname -a
           find $(rustc --print sysroot) -name 'libstd-*.rlib' | sed -ne 's:^.*/\([^/]*\)/lib/libstd-[^/]*.rlib:\1:p'
       - name: apt
-        run: sudo apt update && sudo apt install -yq pkg-config libssl-dev golang clang
+        run: sudo apt update && sudo apt install -yq pkg-config libdbus-1-dev libssl-dev golang clang
       - name: Checkout code from repository
         uses: actions/checkout@v4
       - name: Build Base
