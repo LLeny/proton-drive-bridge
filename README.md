@@ -29,6 +29,7 @@ For best results:
   - `MV` - Rename file/directory
   - `GET` - Download file
   - `PUT` - Upload file
+- Proton Drive Photos share mapped
 
 ## Prerequisites
 
