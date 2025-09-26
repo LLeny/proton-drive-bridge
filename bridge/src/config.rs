@@ -49,7 +49,7 @@ impl Config {
         let config_file = Self::config_file()?;
         if config_file.exists() {
             let content = std::fs::read(config_file)?;
-            let cfg = serde_json::from_slice(&content)?;
+            let cfg: Config = serde_json::from_slice(&content)?;
             Ok(cfg)
         } else {
             let cfg = Config::default();

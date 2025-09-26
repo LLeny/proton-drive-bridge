@@ -11,13 +11,14 @@ const APP_NAME: &str = "pdrive-bridge";
 use clap::Parser;
 use crate::cli::Args;
 
-fn main() -> iced::Result {
+#[tokio::main]
+async fn main() -> iced::Result {
     env_logger::init();
 
     let args = Args::parse();
 
     if args.cli {
-        if let Err(e) = cli::run(args) {
+        if let Err(e) = cli::run(args).await {
             eprintln!("error: {e:#}");
         }
         return Ok(());

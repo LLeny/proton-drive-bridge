@@ -10,6 +10,7 @@ use once_cell::sync::OnceCell;
 
 pub(crate) struct Cache<PGPProv: proton_crypto::crypto::PGPProviderSync> {
     myfiles_ids: OnceCell<VolumeShareNodeIDs>,
+    photos_ids: OnceCell<VolumeShareNodeIDs>,
     share_keys: FrozenMap<String, Box<UnlockedUserKey>>,
     volumes: FrozenMap<String, Box<Volume>>,
     nodes: FrozenMap<String, Box<DecryptedNode<PGPProv>>>,
@@ -26,11 +27,16 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync> Cache<PGPProv> {
     pub(crate) fn new(session_store: SessionStore) -> Self {
         Self {
             myfiles_ids: OnceCell::new(),
+            photos_ids: OnceCell::new(),
             share_keys: FrozenMap::new(),
             volumes: FrozenMap::new(),
             nodes: FrozenMap::new(),
             session_store,
         }
+    }
+
+    pub(crate) fn set_photos_share_ids(&self, myfiles: VolumeShareNodeIDs) {
+        let _ = self.photos_ids.set(myfiles);
     }
 
     pub(crate) fn set_myfile_ids(&self, myfiles: VolumeShareNodeIDs) {
@@ -51,6 +57,10 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync> Cache<PGPProv> {
 
     pub(crate) fn myfiles_ids(&self) -> Option<&VolumeShareNodeIDs> {
         self.myfiles_ids.get()
+    }
+
+    pub(crate) fn photos_share_ids(&self) -> Option<&VolumeShareNodeIDs> {
+        self.photos_ids.get()
     }
 
     pub(crate) fn get_share_key(&self, id: &str) -> Option<&UnlockedUserKey> {
@@ -75,10 +85,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync> Cache<PGPProv> {
             .private)
     }
 
-    pub(crate) fn get_share_private_key(
-        &self,
-        share_id: &str,
-    ) -> Result<&UnlockedUserKey> {
+    pub(crate) fn get_share_private_key(&self, share_id: &str) -> Result<&UnlockedUserKey> {
         self.get_share_key(share_id)
             .ok_or(APIError::Account(format!(
                 "Couldn't find private key for share '{share_id}'"
@@ -98,10 +105,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync> Cache<PGPProv> {
         self.session_store.get_user()
     }
 
-    pub(crate) fn get_unlocked_address_key(
-        &self,
-        id: &str,
-    ) -> Option<Vec<&UnlockedUserKey>> {
+    pub(crate) fn get_unlocked_address_key(&self, id: &str) -> Option<Vec<&UnlockedUserKey>> {
         self.session_store.get_unlocked_address_key(id)
     }
 

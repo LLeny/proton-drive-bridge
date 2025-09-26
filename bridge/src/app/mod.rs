@@ -191,7 +191,7 @@ impl App {
             Err(e) => {
                 error!("{e}");
                 return Task::done(Message::Error(
-                    "Couldn't lock vault, shouldn't happen".to_owned(),
+                    format!("Couldn't lock vault, {e}"),
                 ));
             }
         };

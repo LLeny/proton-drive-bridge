@@ -9,6 +9,14 @@ A FTP server bridge for Proton Drive, built on top of [libunftp](https://github.
 > ⚠️ **IMPORTANT DISCLAIMER**: This is NOT an official Proton application. This is a third-party project not affiliated with or endorsed by Proton AG. Use this 
 software at your own risk. The developers are not responsible for any data loss, security issues, or other problems that may arise from using this software. Always ensure you understand the security implications before entering your Proton credentials.
 
+---
+
+## FTP Client Recommendations
+
+For best results:
+- **Use only one thread** in your FTP client (disable parallel transfers).
+- **Set the command timeout** to a sufficiently long period to avoid disconnects during large operations.
+
 ## Features
 
 - Secure access to Proton Drive via HTTPS
@@ -130,6 +138,14 @@ proton-drive-bridge --cli --auth-file /path/to/users.json
 
 - `PROTON_USERNAME`: Your Proton account email
 - `PROTON_PASSWORD`: Your Proton account password
+
+## Proton Drive Photos Share
+
+- The Proton Drive Photos share is available under the `/drive_photos` directory.
+- Any folder you create inside `/drive_photos` will appear as an **album** in Proton Drive.
+- **Albums cannot be nested:** You cannot create albums inside other albums (only one level of albums is supported).
+- When you upload a photo to an album, it will **also be uploaded to `/drive_photos`**.
+- When you delete a photo from an album, it will **also be deleted from `/drive_photos`**.
 
 ## Security Notes
 

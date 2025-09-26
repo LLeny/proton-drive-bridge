@@ -61,84 +61,76 @@ pub struct Args {
     pub key: Option<PathBuf>,
 }
 
-pub fn run(args: Args) -> Result<()> {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-        .context("failed to build Tokio runtime")?;
+pub async fn run(args: Args) -> Result<()> {
+    let mut cfg = Config::initialize().context("failed to load config")?;
 
-    rt.block_on(async move {
-        let mut cfg = Config::initialize().context("failed to load config")?;
+    let salted_password: Password;
+    let mut unlocked_vault: Option<UnlockedVault> = None;
 
-        let salted_password: Password;
-        let mut unlocked_vault: Option<UnlockedVault> = None;
+    if crate::keyring::get_key().is_err() {
+        println!("[bridge] No existing session found. Creating a new bridge session...");
+        salted_password = create_bridge_session_password(&cfg)?;
+    } else {
+        println!("[bridge] Unlocking existing bridge session...");
+        loop {
+            let pass = prompt_password("Bridge session password: ")?;
+            let srp = proton_crypto::new_srp_provider();
+            let salted = srp
+                .mailbox_password(pass.trim().as_bytes(), cfg.drive.salt)
+                .map_err(|e| anyhow!(e.to_string()))?;
+            let salted_vec = salted.as_ref().to_vec();
 
-        if crate::keyring::get_key().is_err() {
-            println!("[bridge] No existing session found. Creating a new bridge session...");
-            salted_password = create_bridge_session_password(&cfg)?;
-        } else {
-            println!("[bridge] Unlocking existing bridge session...");
-            loop {
-                let pass = prompt_password("Bridge session password: ")?;
-                let srp = proton_crypto::new_srp_provider();
-                let salted = srp
-                    .mailbox_password(pass.trim().as_bytes(), cfg.drive.salt)
-                    .map_err(|e| anyhow!(e.to_string()))?;
-                let salted_vec = salted.as_ref().to_vec();
+            if let Ok(u) = cfg.drive.vault.unlock(&salted_vec) {
+                println!("[bridge] Session unlocked.");
+                unlocked_vault = Some(u);
+                salted_password = Password(salted_vec);
+                break;
+            }
 
-                if let Ok(u) = cfg.drive.vault.unlock(&salted_vec) {
-                    println!("[bridge] Session unlocked.");
-                    unlocked_vault = Some(u);
-                    salted_password = Password(salted_vec);
+            eprintln!("[bridge] Wrong session password.");
+            print!("[bridge] Try again (t), Reset session (r), or Quit (q)? [t]: ");
+            io::stdout().flush().ok();
+            let mut choice = String::new();
+            io::stdin().read_line(&mut choice).ok();
+            match choice.trim().to_lowercase().as_str() {
+                "r" | "reset" => {
+                    println!("[bridge] Resetting bridge session...");
+                    crate::keyring::clear_key().ok();
+                    cfg.drive.vault = LockedVault::default();
+                    cfg.save().ok();
+                    salted_password = create_bridge_session_password(&cfg)?;
+                    unlocked_vault = None;
                     break;
                 }
-
-                eprintln!("[bridge] Wrong session password.");
-                print!("[bridge] Try again (t), Reset session (r), or Quit (q)? [t]: ");
-                io::stdout().flush().ok();
-                let mut choice = String::new();
-                io::stdin().read_line(&mut choice).ok();
-                match choice.trim().to_lowercase().as_str() {
-                    "r" | "reset" => {
-                        println!("[bridge] Resetting bridge session...");
-                        crate::keyring::clear_key().ok();
-                        cfg.drive.vault = LockedVault::default();
-                        cfg.save().ok();
-                        salted_password = create_bridge_session_password(&cfg)?;
-                        unlocked_vault = None;
-                        break;
-                    }
-                    "q" | "quit" | "n" | "no" => {
-                        println!("[bridge] Aborting as requested.");
-                        return Ok(());
-                    }
-                    _ => (),
+                "q" | "quit" | "n" | "no" => {
+                    println!("[bridge] Aborting as requested.");
+                    return Ok(());
                 }
+                _ => (),
             }
         }
+    }
 
-        let (tokens, session_store) = if let Some(unlocked) = unlocked_vault {
-            println!("[bridge] Refreshing Proton session tokens...");
-            match refresh_from_vault(&unlocked).await {
-                Ok((t, s)) => {
-                    println!("[bridge] Token refresh successful.");
-                    save_to_vault(&mut cfg, &salted_password, &t, &s)?;
-                    (t, s)
-                }
-                Err(e) => {
-                    eprintln!("[bridge] Token refresh failed: {e}. Proceeding with full login.");
-                    login_and_initialize(&args, &salted_password, &mut cfg).await?
-                }
+    let (tokens, session_store) = if let Some(unlocked) = unlocked_vault {
+        println!("[bridge] Refreshing Proton session tokens...");
+        match refresh_from_vault(&unlocked).await {
+            Ok((t, s)) => {
+                println!("[bridge] Token refresh successful.");
+                save_to_vault(&mut cfg, &salted_password, &t, &s)?;
+                (t, s)
             }
-        } else {
-            println!("[bridge] Logging into Proton...");
-            login_and_initialize(&args, &salted_password, &mut cfg).await?
-        };
+            Err(e) => {
+                eprintln!("[bridge] Token refresh failed: {e}. Proceeding with full login.");
+                login_and_initialize(&args, &salted_password, &mut cfg).await?
+            }
+        }
+    } else {
+        println!("[bridge] Logging into Proton...");
+        login_and_initialize(&args, &salted_password, &mut cfg).await?
+    };
 
-        println!("[bridge] Starting FTP server on port {}...", args.port);
-        run_server(tokens, session_store, args).await
-    })
+    println!("[bridge] Starting FTP server on port {}...", args.port);
+    run_server(tokens, session_store, args).await
 }
 
 fn create_bridge_session_password(cfg: &Config) -> Result<Password> {
@@ -179,9 +171,7 @@ async fn login_and_initialize(
     let username = if let Some(u) = args.username.clone() {
         u
     } else {
-        prompt_stdin("Proton username: ")?
-            .trim()
-            .to_string()
+        prompt_stdin("Proton username: ")?.trim().to_string()
     };
     let password_str = if let Some(p) = args.password.clone() {
         p
@@ -225,7 +215,12 @@ async fn login_and_initialize(
     Ok((tokens, session_store))
 }
 
-fn save_to_vault(cfg: &mut Config, salted_password: &Password, tokens: &AuthTokens, session_store: &SessionStore) -> Result<()> {
+fn save_to_vault(
+    cfg: &mut Config,
+    salted_password: &Password,
+    tokens: &AuthTokens,
+    session_store: &SessionStore,
+) -> Result<()> {
     let unlocked = crate::vault::UnlockedVault {
         refresh: tokens.refresh.clone(),
         access: tokens.access.clone(),
@@ -236,7 +231,7 @@ fn save_to_vault(cfg: &mut Config, salted_password: &Password, tokens: &AuthToke
     let locked = unlocked
         .lock(salted_password.0.as_slice())
         .context("failed to lock session vault")?;
-    
+
     cfg.drive.vault = locked;
     cfg.save()
 }

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use libunftp::auth::UserDetail;
 use libunftp::storage::{Error, ErrorKind, Fileinfo, Metadata, Result, StorageBackend};
-use log::info;
+use log::{error, info};
 use pmapi::client::authenticator::AuthTokens;
 use pmapi::client::pdclient::{Node, PDClient, TypeNode};
 use pmapi::client::session_store::SessionStore;
@@ -13,7 +13,8 @@ use std::{fmt::Debug, path::Path};
 use tokio::sync::{mpsc, oneshot};
 
 const ROOT_PATH: &str = "/";
-const PHOTOS_PATH: &str = "/photos";
+const PHOTOS_FOLDER: &str = "drive_photos";
+const PHOTOS_PATH: &str = "/drive_photos";
 const READONLY_PATHS: [&str; 2] = [ROOT_PATH, PHOTOS_PATH];
 
 type UploadReader = Box<dyn tokio::io::AsyncRead + Send + Sync + Unpin + 'static>;
@@ -59,7 +60,9 @@ where
         info!("List: {:?}", &path);
         let node = self.get_node_from_path(path.as_ref(), false).await?;
 
-        if !matches!(node.node_type, TypeNode::Folder(_)) {
+        if !matches!(node.node_type, TypeNode::Folder(_))
+            && !matches!(node.node_type, TypeNode::Album)
+        {
             return Err(Error::new(
                 ErrorKind::PermanentDirectoryNotAvailable,
                 "Not a directory.",
@@ -68,18 +71,28 @@ where
 
         let path_buf = path.as_ref().to_path_buf();
 
-        let children = send_folder_children(&self.pm_tx, node.uid)
-            .await?
-            .into_iter()
-            .map(|c| {
-                let mut local_path = path_buf.clone();
-                local_path.push(&c.name);
-                Fileinfo {
-                    path: local_path,
-                    metadata: c.into(),
-                }
-            })
-            .collect();
+        let mut children: Vec<Fileinfo<PathBuf, Self::Metadata>> =
+            send_folder_children(&self.pm_tx, node.uid)
+                .await?
+                .into_iter()
+                .map(|c| {
+                    let mut local_path = path_buf.clone();
+                    local_path.push(&c.name);
+                    Fileinfo {
+                        path: local_path,
+                        metadata: c.into(),
+                    }
+                })
+                .collect();
+
+        if path_string(path.as_ref()) == ROOT_PATH
+            && let Ok(photos) = send_get_photos_root(&self.pm_tx).await
+        {
+            children.push(Fileinfo {
+                path: PathBuf::from(PHOTOS_PATH),
+                metadata: photos.into(),
+            });
+        }
 
         Ok(children)
     }
@@ -331,14 +344,22 @@ where
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .collect();
 
+        let path_string = path_string(path.as_ref());
+
         let mut current_node = send_get_root(&self.pm_tx).await?;
 
-        if path_string(path.as_ref()) == "/" {
+        if path_string == ROOT_PATH {
             return Ok(current_node);
         }
 
         for next_node_name in &split_path {
             info!("split path: {next_node_name:?}");
+
+            if next_node_name == PHOTOS_FOLDER {
+                current_node = send_get_photos_root(&self.pm_tx).await?;
+                continue;
+            }
+
             current_node = match self.get_child(&current_node.uid, next_node_name).await {
                 Ok(n) => n,
                 Err(e) => {
@@ -409,6 +430,9 @@ where
 }
 
 enum PDCommand {
+    GetPhotosRoot {
+        reply: oneshot::Sender<std::result::Result<Node, String>>,
+    },
     GetRoot {
         reply: oneshot::Sender<std::result::Result<Node, String>>,
     },
@@ -459,7 +483,7 @@ async fn send_upload_file(
     .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
     rx.await
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(|e| Error::new(ErrorKind::ConnectionClosed, e))
+        .map_err(log_pd_error)
 }
 
 async fn send_create_folder(
@@ -477,7 +501,7 @@ async fn send_create_folder(
     .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
     rx.await
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(|e| Error::new(ErrorKind::ConnectionClosed, e))
+        .map_err(log_pd_error)
 }
 
 async fn send_delete_nodes(
@@ -490,7 +514,7 @@ async fn send_delete_nodes(
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
     rx.await
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(|e| Error::new(ErrorKind::ConnectionClosed, e))
+        .map_err(log_pd_error)
 }
 
 async fn send_rename_node(
@@ -508,7 +532,7 @@ async fn send_rename_node(
     .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
     rx.await
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(|e| Error::new(ErrorKind::ConnectionClosed, e))
+        .map_err(log_pd_error)
 }
 
 async fn send_get_root(tx: &mpsc::Sender<PDCommand>) -> Result<Node> {
@@ -518,7 +542,17 @@ async fn send_get_root(tx: &mpsc::Sender<PDCommand>) -> Result<Node> {
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
     rx.await
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(|e| Error::new(ErrorKind::ConnectionClosed, e))
+        .map_err(log_pd_error)
+}
+
+async fn send_get_photos_root(tx: &mpsc::Sender<PDCommand>) -> Result<Node> {
+    let (reply, rx) = oneshot::channel();
+    tx.send(PDCommand::GetPhotosRoot { reply })
+        .await
+        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
+    rx.await
+        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
+        .map_err(log_pd_error)
 }
 
 async fn send_folder_children(
@@ -534,7 +568,7 @@ async fn send_folder_children(
     .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
     rx.await
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(|e| Error::new(ErrorKind::ConnectionClosed, e))
+        .map_err(log_pd_error)
 }
 
 async fn send_get_downloader(
@@ -550,7 +584,7 @@ async fn send_get_downloader(
     .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
     rx.await
         .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(|e| Error::new(ErrorKind::ConnectionClosed, e))
+        .map_err(log_pd_error)
 }
 
 impl From<Node> for Meta {
@@ -569,6 +603,7 @@ impl Metadata for Meta {
 
     fn is_dir(&self) -> bool {
         matches!(&self.inner.node_type, TypeNode::Folder(_))
+            || matches!(&self.inner.node_type, TypeNode::Album)
     }
 
     fn is_file(&self) -> bool {
@@ -619,6 +654,13 @@ fn run_pdclient_worker<PGPProv, SRPProv>(
     rt.block_on(async move {
         while let Some(cmd) = pm_rx.recv().await {
             match cmd {
+                PDCommand::GetPhotosRoot { reply } => {
+                    let res = pm_client
+                        .get_photos_root_folder()
+                        .await
+                        .map_err(|e| e.to_string());
+                    let _ = reply.send(res);
+                }
                 PDCommand::GetRoot { reply } => {
                     let res = pm_client
                         .get_myfiles_root_folder()
@@ -685,4 +727,9 @@ fn run_pdclient_worker<PGPProv, SRPProv>(
             }
         }
     });
+}
+
+fn log_pd_error(err: String) -> Error {
+    error!("Proton Drive error: {err}");
+    Error::new(ErrorKind::LocalError, err)
 }

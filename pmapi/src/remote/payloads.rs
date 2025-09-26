@@ -14,7 +14,8 @@ pub fn to_option_base64<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::O
 pub fn from_option_base64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
     let base64 = <Option<String>>::deserialize(d)?;
     match base64 {
-        Some(v) => BASE64_STANDARD.decode(v.as_bytes())
+        Some(v) => BASE64_STANDARD
+            .decode(v.as_bytes())
             .map(Some)
             .map_err(serde::de::Error::custom),
         None => Ok(None),
@@ -88,7 +89,10 @@ pub(crate) struct KeySalts {
 #[allow(non_snake_case, dead_code)]
 pub(crate) struct Salt {
     pub ID: String,
-    #[serde(deserialize_with = "from_option_base64", serialize_with = "to_option_base64")]
+    #[serde(
+        deserialize_with = "from_option_base64",
+        serialize_with = "to_option_base64"
+    )]
     pub KeySalt: Option<Vec<u8>>,
 }
 
@@ -438,6 +442,13 @@ pub(crate) struct FileProperties {
     pub ContentKeyPacketSignature: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct AlbumProperties {
+    pub NodeHashKey: String,
+    pub XAttr: Option<String>,
+}
+
 #[derive(Derivative, Deserialize)]
 #[derivative(Debug)]
 #[allow(non_snake_case, dead_code)]
@@ -465,6 +476,7 @@ pub(crate) struct LinkResponse {
     pub Link: Link,
     pub Folder: Option<FolderProperties>,
     pub File: Option<FileProperties>,
+    pub Album: Option<AlbumProperties>,
     pub Sharing: Option<LinkSharingDetails>,
     pub Membership: Option<LinkMembership>,
 }
@@ -574,6 +586,14 @@ pub(crate) struct EncryptedNodeCrypto {
     pub File: Option<EncryptedNodeFile>,
     pub ActiveRevision: Option<EncryptedRevision>,
     pub Folder: Option<EncryptedNodeFolder>,
+    pub Album: Option<EncryptedNodeAlbum>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct EncryptedNodePhoto {
+    pub NodeHashKey: String,
+    pub XAttr: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -593,6 +613,13 @@ pub(crate) struct EncryptedNodeFile {
 pub(crate) struct EncryptedNodeFolder {
     pub ArmoredExtendedAttributes: Option<String>,
     pub ArmoredHashKey: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct EncryptedNodeAlbum {
+    pub XAttr: Option<String>,
+    pub NodeHashKey: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -724,6 +751,7 @@ pub(crate) enum LinkType {
     None = 0,
     Folder = 1,
     File = 2,
+    Album = 3,
 }
 
 #[derive(serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug)]
@@ -742,6 +770,7 @@ pub(crate) enum NodeType {
     None = 0,
     File = 1,
     Folder = 2,
+    Album = 3,
 }
 
 #[derive(serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug, Clone)]
@@ -774,7 +803,9 @@ pub(crate) struct FileExtendedAttributesSchemaDigest {
     pub SHA1: String,
 }
 
-#[derive(serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug, Clone)]
+#[derive(
+    serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug, Clone, Zeroize,
+)]
 #[repr(u8)]
 pub(crate) enum ShareType {
     None = 0,
@@ -784,7 +815,9 @@ pub(crate) enum ShareType {
     Photos = 4,
 }
 
-#[derive(serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug)]
+#[derive(
+    serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug, Clone, Zeroize,
+)]
 #[repr(u8)]
 pub(crate) enum ShareState {
     None = 0,
@@ -910,6 +943,153 @@ pub(crate) struct GetMyFilesResponse {
     pub Code: ErrorCode,
 }
 
+#[derive(
+    serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Debug, Clone, Zeroize,
+)]
+#[repr(u8)]
+pub(crate) enum ShareFlag {
+    None = 0,
+    Primary = 1,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Zeroize, ZeroizeOnDrop)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct ShareListItem {
+    pub ShareID: String,
+    pub Type: ShareType,
+    pub State: ShareState,
+    pub LinkID: String,
+    pub VolumeID: String,
+    pub Creator: Option<String>,
+    pub Flags: ShareFlag,
+    #[serde(deserialize_with = "deserialize_bool_from_anything")]
+    pub Locked: bool,
+    #[serde(deserialize_with = "deserialize_bool_from_anything")]
+    pub VolumeSoftDeleted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct ShareListResponse {
+    pub Code: ErrorCode,
+    pub Shares: Vec<ShareListItem>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct PhotoLinksResponse {
+    pub Photos: Vec<PhotoLink>,
+    pub Code: ErrorCode,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct PhotoLink {
+    pub LinkID: String,
+    pub CaptureTime: u64,
+    pub Hash: String,
+    pub ContentHash: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct AlbumLinksResponse {
+    pub Photos: Vec<AlbumLink>,
+    pub Code: ErrorCode,
+    #[serde(deserialize_with = "deserialize_bool_from_anything")]
+    pub More: bool,
+    pub AnchorID: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct AlbumLink {
+    pub LinkID: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct CreateAlbumRequest {
+    pub Locked: bool,
+    pub Link: CreateAlbumLink,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct CreateAlbumLink {
+    pub Name: String,
+    pub Hash: String,
+    pub NodePassphrase: String,
+    pub NodePassphraseSignature: String,
+    pub SignatureEmail: String,
+    pub NodeKey: String,
+    pub NodeHashKey: String,
+    pub XAttr: Option<String>
+}
+    
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct CreateAlbumResponse {
+    pub Code: ErrorCode,
+    pub Album: Option<CreatedAlbum>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct CreatedAlbum {
+    pub Link: AlbumLink
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct AlbumLiink {
+    pub LinkID: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct AddPhotoToAlbumRequest {
+    pub AlbumData: Vec<AddPhotoToAlbumData>,
+}
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct AddPhotoToAlbumData {
+    pub LinkID: String,
+    pub Hash: String,
+    pub Name: String,
+    pub NameSignatureEmail: String,
+    pub NodePassphrase: String,
+    pub ContentHash: String,
+    pub NodePassphraseSignature: Option<String>,
+    pub SignatureEmail: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct AddPhotoToAlbumResponse {
+    pub Code: ErrorCode,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Zeroize, ZeroizeOnDrop)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct ShareResponse {
+    pub ShareID: String,
+    pub Type: ShareType,
+    pub State: ShareState,
+    pub LinkID: String,
+    pub VolumeID: String,
+    pub Creator: Option<String>,
+    pub Flags: ShareFlag,
+    #[serde(deserialize_with = "deserialize_bool_from_anything")]
+    pub Locked: bool,
+    #[serde(deserialize_with = "deserialize_bool_from_anything")]
+    pub VolumeSoftDeleted: bool,
+    pub Key: String,
+    pub Passphrase: String,
+    pub PassphraseSignature: String,
+    pub AddressID: Option<String>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[allow(non_snake_case, dead_code)]
 pub(crate) struct BlockUploadRequest {
@@ -918,6 +1098,16 @@ pub(crate) struct BlockUploadRequest {
     pub LinkID: String,
     pub RevisionID: String,
     pub BlockList: Vec<BlockUpload>,
+    pub ThumbnailList: Vec<ThumbnailUpload>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct ThumbnailUpload {
+    pub Type: ThumbnailType,
+    pub Size: usize,
+    #[serde(serialize_with = "to_base64", deserialize_with = "from_base64")]
+    pub Hash: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -943,6 +1133,16 @@ pub(crate) struct BlockUploadVerifier {
 pub(crate) struct BlockUploadResponse {
     pub Code: ErrorCode,
     pub UploadLinks: Vec<BlockUploadLink>,
+    pub ThumbnailLinks: Vec<ThumbnailUploadLink>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct ThumbnailUploadLink {
+    pub BareURL: String,
+    pub Token: String,
+    pub URL: String,
+    ThumbnailType: ThumbnailType,
 }
 
 #[derive(Debug, Deserialize)]
@@ -970,7 +1170,16 @@ pub(crate) struct CommitDraftRequest {
     pub ManifestSignature: String,
     pub SignatureAddress: String,
     pub XAttr: Option<String>,
-    pub Photo: Option<u8>,
+    pub Photo: Option<CommitDraftPhoto>,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(non_snake_case, dead_code)]
+pub(crate) struct CommitDraftPhoto {
+    pub CaptureTime: i64,
+    pub ContentHash: String,
+    pub MainPhotoLinkID: Option<String>,
+    pub Tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

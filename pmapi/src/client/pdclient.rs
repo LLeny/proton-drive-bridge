@@ -1,7 +1,9 @@
 use crate::client::authenticator::AuthTokens;
+use crate::client::photos::Photos;
 use crate::client::session_store::SessionStore;
 use crate::errors::Result;
 use crate::remote::payloads::{DecryptedNode, NodeType};
+use crate::uids::split_node_revision_uid;
 use crate::{
     client::{cache::Cache, crypto::Crypto, nodes::Nodes, shares::Shares},
     errors::APIError,
@@ -20,6 +22,7 @@ pub struct PDClient<
     cache: Cache<PGPProv>,
     nodes: Nodes<PGPProv, SRPProv>,
     shares: Shares<PGPProv, SRPProv>,
+    photos: Photos<PGPProv, SRPProv>,
 }
 
 impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::srp::SRPProvider>
@@ -52,6 +55,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             cache: Cache::new(session_store),
             nodes: Nodes::new(),
             shares: Shares::new(),
+            photos: Photos::new(),
         }
     }
 
@@ -65,6 +69,28 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         let ids = self
             .shares
             .get_myfiles_ids(&self.cache, &self.crypto, &self.remote_client)
+            .await?;
+        let node_uid = make_node_uid(&ids.VolumeID, &ids.RootNodeId);
+        let nodes = self
+            .nodes
+            .get_nodes(
+                vec![node_uid],
+                &self.cache,
+                &self.crypto,
+                &self.remote_client,
+            )
+            .await?;
+        nodes
+            .into_iter()
+            .next()
+            .map(std::convert::Into::into)
+            .ok_or(APIError::Node("Node not found.".to_owned()))
+    }
+
+    pub async fn get_photos_root_folder(&self) -> Result<Node> {
+        let ids = self
+            .shares
+            .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
             .await?;
         let node_uid = make_node_uid(&ids.VolumeID, &ids.RootNodeId);
         let nodes = self
@@ -130,6 +156,15 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     /// Returns an error if the parent node cannot be retrieved, if creating the folder fails,
     /// or if the new folder cannot be fetched/decrypted.
     pub async fn create_folder(&self, parent_node_uid: String, folder_name: &str) -> Result<Node> {
+        if let Ok(ids) = self
+            .shares
+            .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
+            .await
+            && parent_node_uid == make_node_uid(&ids.VolumeID, &ids.RootNodeId)
+        {
+            return self.create_album(folder_name).await;
+        }
+
         let parent = self
             .nodes
             .get_single_node(
@@ -139,6 +174,13 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
                 &self.remote_client,
             )
             .await?;
+
+        if matches!(parent.encrypted.Type, NodeType::Album) {
+            return Err(APIError::Node(
+                "Can't create an album within an album.".to_string(),
+            ));
+        }
+
         let folder_uid = self
             .nodes
             .create_folder_node(
@@ -150,6 +192,39 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             )
             .await?;
         let folder = self.get_node(&folder_uid).await?;
+        Ok(folder)
+    }
+
+    async fn create_album(&self, album_name: &str) -> Result<Node> {
+        let ids = self
+            .shares
+            .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
+            .await?;
+        let node_uid = make_node_uid(&ids.VolumeID, &ids.RootNodeId);
+        let nodes = self
+            .nodes
+            .get_nodes(
+                vec![node_uid],
+                &self.cache,
+                &self.crypto,
+                &self.remote_client,
+            )
+            .await?;
+        let photos_root = nodes
+            .first()
+            .ok_or(APIError::Node("Couldn't find Photos share.".to_owned()))?;
+
+        let uid = self
+            .photos
+            .create_album(
+                photos_root,
+                album_name,
+                &self.cache,
+                &self.crypto,
+                &self.remote_client,
+            )
+            .await?;
+        let folder = self.get_node(&uid).await?;
         Ok(folder)
     }
 
@@ -254,16 +329,89 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     where
         R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
     {
-        self.nodes
+        let parent_node = self.get_node(&parent_node_uid).await?;
+
+        if matches!(parent_node.node_type, TypeNode::Album) {
+            return self
+                .upload_photo_to_album(parent_node_uid, file_name, reader)
+                .await;
+        }
+
+        let (len, _) = self
+            .nodes
             .upload_file(
                 parent_node_uid,
                 file_name,
                 reader,
                 &self.cache,
                 &self.crypto,
+                &self.photos,
                 &self.remote_client,
             )
+            .await?;
+
+        Ok(len)
+    }
+
+    async fn upload_photo_to_album<R>(
+        &self,
+        parent_node_uid: String,
+        file_name: &str,
+        reader: R,
+    ) -> Result<usize>
+    where
+        R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
+    {
+        let photos_root_ids = self
+            .shares
+            .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
+            .await?;
+
+        let (len, node_revision_uid) = self
+            .nodes
+            .upload_file(
+                make_node_uid(&photos_root_ids.VolumeID, &photos_root_ids.RootNodeId),
+                file_name,
+                reader,
+                &self.cache,
+                &self.crypto,
+                &self.photos,
+                &self.remote_client,
+            )
+            .await?;
+
+        let (photo_volume_id, photo_node_id, _) = split_node_revision_uid(&node_revision_uid)?;
+        let photo_node_uid = make_node_uid(&photo_volume_id, &photo_node_id);
+
+        let photo_node = self
+            .nodes
+            .get_single_node(
+                photo_node_uid,
+                &self.cache,
+                &self.crypto,
+                &self.remote_client,
+            )
+            .await?;
+
+        let album_node = self
+            .nodes
+            .get_single_node(
+                parent_node_uid.clone(),
+                &self.cache,
+                &self.crypto,
+                &self.remote_client,
+            )
+            .await?;
+
+        if self
+            .photos
+            .add_photo_to_album(&album_node, photo_node, &self.cache, &self.crypto, &self.remote_client)
             .await
+            .is_ok()
+        {
+            return Ok(len);
+        }
+        Err(APIError::Upload("Couldn't add photo to album.".to_string()))
     }
 
     /// Deletes the nodes identified by `node_uids` and updates the cache accordingly.
@@ -311,6 +459,7 @@ where
                         .unwrap_or_default(),
                 }),
                 NodeType::Folder => TypeNode::Folder(TypeFolderProperties {}),
+                NodeType::Album => TypeNode::Album,
             },
         }
     }
@@ -329,4 +478,6 @@ pub enum TypeNode {
     None,
     File(TypeFileProperties),
     Folder(TypeFolderProperties),
+    Photo,
+    Album,
 }

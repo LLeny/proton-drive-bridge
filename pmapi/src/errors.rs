@@ -23,7 +23,9 @@ pub enum APIError {
     #[error("Upload error: {0}")]
     Upload(String),
     #[error("Account error: {0}")]
-    Account(String),
+    Account(String),    
+    #[error("Image error: {0}")]
+    Image(String),
     #[error("unknown API error: {0}")]
     Unknown(String),
 }

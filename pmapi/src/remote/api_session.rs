@@ -65,7 +65,6 @@ impl APISession {
         R: DeserializeOwned,
     {
         let response = self.request(req_type, endpoint, payload).await?;
-
         let content = response.text().await.map_err(APIError::Reqwest)?;
         
         serde_json::from_str(&content)

@@ -6,6 +6,7 @@ pub(crate) mod nodes;
 pub(crate) mod payloads;
 pub(crate) mod shares;
 pub(crate) mod upload;
+pub(crate) mod photos;
 
 #[derive(Debug)]
 pub(crate) struct Client {

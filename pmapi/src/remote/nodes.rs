@@ -7,12 +7,7 @@ use crate::errors::ErrorCode;
 use crate::errors::Result;
 use crate::remote::api_session::RequestType;
 use crate::remote::payloads::{
-    CheckAvailableHashesRequest, CheckAvailableHashesResponse, CreateDraftRequest,
-    CreateDraftResponse, CreateFolderRequest, CreateFolderResponse, DeleteDraftRequestPayload,
-    DeleteDraftResponse, DeleteLinksRequestPayload, DeleteLinksResponse, DraftRequestResult,
-    EncryptedNode, EncryptedNodeCrypto, EncryptedNodeFile, EncryptedNodeFolder, EncryptedRevision,
-    LinkResponse, LinkType, LinksRequestPayload, LinksResponse, MemberRole, NodeChildrenResponse,
-    NodeType, RenameLinkParameters, RenameLinkResponse, RevisionState,
+    CheckAvailableHashesRequest, CheckAvailableHashesResponse, CreateDraftRequest, CreateDraftResponse, CreateFolderRequest, CreateFolderResponse, DeleteDraftRequestPayload, DeleteDraftResponse, DeleteLinksRequestPayload, DeleteLinksResponse, DraftRequestResult, EncryptedNode, EncryptedNodeAlbum, EncryptedNodeCrypto, EncryptedNodeFile, EncryptedNodeFolder, EncryptedRevision, LinkResponse, LinkType, LinksRequestPayload, LinksResponse, MemberRole, NodeChildrenResponse, NodeType, RenameLinkParameters, RenameLinkResponse, RevisionState
 };
 use crate::uids::{make_node_revision_uid, make_node_uid};
 use crate::{consts::DRIVE_LINKS_ENDPOINT, errors::APIError, remote::Client, uids::split_node_uid};
@@ -403,6 +398,7 @@ impl EncryptedNode {
                 LinkType::None => NodeType::None,
                 LinkType::Folder => NodeType::Folder,
                 LinkType::File => NodeType::File,
+                LinkType::Album => NodeType::Album,
             },
             CreationTime: link.Link.CreateTime,
             TrashTime: link.Link.TrashTime.unwrap_or(0),
@@ -468,6 +464,16 @@ impl EncryptedNode {
                 } else {
                     None
                 },
+                Album: if link.Link.Type == LinkType::Album
+                    && let Some(album) = &link.Album
+                {
+                    Some(EncryptedNodeAlbum {
+                        XAttr: album.XAttr.clone(),
+                        NodeHashKey: album.NodeHashKey.clone(),
+                    })
+                } else {
+                    None
+                }
             },
         }
     }

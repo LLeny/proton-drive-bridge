@@ -2,3 +2,4 @@ target/*
 bridge/target/*
 pmapi/target/*
 .vscode/launch.json
+.idea/*

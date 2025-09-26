@@ -197,7 +197,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             .ok_or_else(|| {
                 APIError::PGP(format!(
                     "Couldn't find address keys for '{}'",
-                    &share.AddressID
+                    &share.CreatorEmail
                 ))
             })?;
 
@@ -329,7 +329,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
         let mut content_session_key: Option<PGPProv::SessionKey> = None;
         let mut hash_key = None;
 
-        if encrypted_node.Type == NodeType::Folder
+        if matches!(encrypted_node.Type, NodeType::Folder)
             && let Some(folder) = &encrypted_node.EncryptedCrypto.Folder
         {
             hash_key = Some(
@@ -344,7 +344,22 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             );
             let _hash_key_author = encrypted_node.EncryptedCrypto.SignatureEmail.clone();
             // TODO
-        } else if encrypted_node.Type == NodeType::File
+        } else if matches!(encrypted_node.Type, NodeType::Album)
+            && let Some(album) = &encrypted_node.EncryptedCrypto.Album
+        {
+            hash_key = Some(
+                String::from_utf8(self.decrypt(
+                    &album.NodeHashKey,
+                    &decrypted_node_key.private,
+                    &key_verification_key,
+                )?)
+                .map_err(|e| {
+                    APIError::PGP(format!("Couldn't parse decrypted hash key as UTF-8: {e}"))
+                })?,
+            );
+            let _hash_key_author = encrypted_node.EncryptedCrypto.SignatureEmail.clone();
+            // TODO
+        } else if matches!(encrypted_node.Type, NodeType::File)
             && let Some(file) = &encrypted_node.EncryptedCrypto.File
         {
             content_session_key = Some(self.decrypt_content_key(
@@ -365,7 +380,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             hash_key,
         })
     }
-    
+
     pub(crate) fn decrypt_content_key(
         &self,
         content_key_packet: impl AsRef<[u8]>,
@@ -611,10 +626,12 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             .finalize_with_detached_signature()
             .map_err(|e| APIError::PGP(format!("Couldn't encrypt passphrase: {e}")))?;
 
-        let encrypted_passphrase = String::from_utf8(encrypted_passphrase)
-            .map_err(|e| APIError::PGP(format!("Couldn't parse encrypted passphrase as UTF-8: {e}")))?;
-        let passphrase_signature = String::from_utf8(detached_signature)
-            .map_err(|e| APIError::PGP(format!("Couldn't parse passphrase signature as UTF-8: {e}")))?;
+        let encrypted_passphrase = String::from_utf8(encrypted_passphrase).map_err(|e| {
+            APIError::PGP(format!("Couldn't parse encrypted passphrase as UTF-8: {e}"))
+        })?;
+        let passphrase_signature = String::from_utf8(detached_signature).map_err(|e| {
+            APIError::PGP(format!("Couldn't parse passphrase signature as UTF-8: {e}"))
+        })?;
 
         let armored_key_data = self
             .pgp_provider
@@ -627,13 +644,15 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             EncryptedNodeCrypto {
                 SignatureEmail: Some(user.Email.clone()),
                 NameSignatureEmail: Some(user.Email.clone()),
-                ArmoredKey: String::from_utf8(armored_key_data)
-                    .map_err(|e| APIError::PGP(format!("Couldn't parse armored key as UTF-8: {e}")))?,
+                ArmoredKey: String::from_utf8(armored_key_data).map_err(|e| {
+                    APIError::PGP(format!("Couldn't parse armored key as UTF-8: {e}"))
+                })?,
                 ArmoredNodePassphrase: encrypted_passphrase,
                 ArmoredNodePassphraseSignature: passphrase_signature,
                 File: None,
                 ActiveRevision: None,
                 Folder: None,
+                Album: None,
             },
             new_private_key,
         ))
@@ -698,7 +717,7 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
         &self,
         parent: &DecryptedNode<PGPProv>,
         node_type: &NodeType,
-        node_hash: Option<&str>,
+        node_hash: Option<String>,
         parent_hashkey: impl AsRef<[u8]>,
         new_name: &str,
         cache: &Cache<PGPProv>,
@@ -757,8 +776,20 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             Hash: new_name_hash_hex,
             MediaType: mime,
             NameSignatureEmail: user_email.clone(),
-            OriginalNameHash: node_hash.map(std::string::ToString::to_string),
+            OriginalNameHash: node_hash,
         })
+    }
+
+    pub(crate) fn encrypted_thumbnail(&self, session_key: &PGPProv::SessionKey, signing_key: &PGPProv::PrivateKey, thumbnail: &[u8]) -> Result<Vec<u8>> {
+        let encrypted_msg = self
+            .pgp_provider
+            .new_encryptor()
+            .with_session_key_ref(session_key)
+            .with_signing_key(signing_key)
+            .encrypt_raw(thumbnail, DataEncoding::Bytes)
+            .map_err(|e| APIError::PGP(format!("Couldn't encrypt thumbnail: {e}")))?;
+
+        Ok(encrypted_msg.as_slice().to_vec())
     }
 
     pub(crate) fn encrypt_block(

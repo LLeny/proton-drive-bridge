@@ -1,3 +1,5 @@
+use crate::client::photos::Photos;
+use crate::consts::NODE_CHUNK_SIZE;
 use crate::errors::Result;
 use crate::remote::payloads::{DecryptedNode, EncryptedNodeFile, NodeType};
 use crate::{
@@ -37,8 +39,8 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .cloned()
             .collect();
 
-        if !to_query.is_empty() {
-            for node in remote_client.get_nodes(&to_query).await? {
+        for to_load_node_uids in to_query.chunks(NODE_CHUNK_SIZE) {
+            for node in remote_client.get_nodes(to_load_node_uids).await? {
                 let decrypted_node = crypto.decrypt_node(&node, cache)?;
                 cache.add_decrypted_node(decrypted_node.encrypted.Uid.clone(), decrypted_node);
             }
@@ -48,9 +50,9 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .as_ref()
             .iter()
             .map(|uid| {
-                cache.get_decrypted_node(uid).ok_or(APIError::Node(format!(
-                    "Node not found '{uid}'"
-                )))
+                cache
+                    .get_decrypted_node(uid)
+                    .ok_or(APIError::Node(format!("Node not found '{uid}'")))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -64,8 +66,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         crypto: &'c Crypto<PGPProv, SRPProv>,
         remote_client: &'c crate::remote::Client,
     ) -> Result<&'c DecryptedNode<PGPProv>> {
-        self
-            .get_nodes(vec![node_uid], cache, crypto, remote_client)
+        self.get_nodes(vec![node_uid], cache, crypto, remote_client)
             .await?
             .into_iter()
             .next()
@@ -79,10 +80,31 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         crypto: &'c Crypto<PGPProv, SRPProv>,
         remote_client: &'c crate::remote::Client,
     ) -> Result<Vec<&'c DecryptedNode<PGPProv>>> {
+        let Some(node) = cache.get_decrypted_node(node_uid) else {
+            return Err(APIError::Node(format!(
+                "Couldn't retrieve node: '{node_uid}'"
+            )));
+        };
+
         let (volume_id, node_id) = split_node_uid(node_uid)?;
-        let ids = remote_client
-            .get_node_children_link_ids(volume_id.as_str(), node_id.as_str())
-            .await?;
+        let ids = match &node.encrypted.Type {
+            NodeType::None | NodeType::File => {
+                return Err(APIError::Node(format!(
+                    "Node '{node_uid}' is not a folder or album."
+                )));
+            }
+            NodeType::Folder => {
+                remote_client
+                    .get_node_children_link_ids(volume_id.as_str(), node_id.as_str())
+                    .await?
+            }
+            NodeType::Album => {
+                remote_client
+                    .get_album_children_link_ids(volume_id.as_str(), node_id.as_str())
+                    .await?
+            }
+        };
+
         let uids: Vec<String> = ids.iter().map(|id| make_node_uid(&volume_id, id)).collect();
         self.get_nodes(uids, cache, crypto, remote_client).await
     }
@@ -121,7 +143,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         let params = crypto.encrypt_new_node_name(
             parent,
             &node.encrypted.Type,
-            node.encrypted.Hash.as_deref(),
+            node.encrypted.Hash.clone(),
             parent_hashkey,
             new_name,
             cache,
@@ -198,8 +220,9 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         reader: R,
         cache: &'c Cache<PGPProv>,
         crypto: &'c Crypto<PGPProv, SRPProv>,
+        photos: &'c Photos<PGPProv, SRPProv>,
         remote_client: &'c crate::remote::Client,
-    ) -> Result<usize>
+    ) -> Result<(usize, String)>
     where
         R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
     {
@@ -242,10 +265,11 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         node_crypto.File = Some(EncryptedNodeFile {
             ContentKeyPacket: content_keys.encrypted_session_key,
             ArmoredContentKeyPacketSignature: Some(
-                String::from_utf8(content_keys.armored_session_key_signature)
-                    .map_err(|e| APIError::PGP(format!(
+                String::from_utf8(content_keys.armored_session_key_signature).map_err(|e| {
+                    APIError::PGP(format!(
                         "Couldn't parse armored session key signature as UTF-8: {e}"
-                    )))?,
+                    ))
+                })?,
             ),
         });
 
@@ -278,12 +302,14 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .upload_node_blocks(
                 &node_draft.node_revision_uid,
                 user.Email.clone(),
+                name_params.MediaType,
                 &node_private_key,
                 &content_keys.content_key_packet_session_key,
                 &verification_key.private,
                 address_id,
                 reader,
                 crypto,
+                photos,
             )
             .await;
 
@@ -291,7 +317,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             remote_client.delete_draft(&node_draft.node_uid).await?;
         }
 
-        uploaded
+        Ok((uploaded.unwrap(), node_draft.node_revision_uid))
     }
 }
 

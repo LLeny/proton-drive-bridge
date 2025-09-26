@@ -41,12 +41,30 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
                 AddressID: encrypted_share.AddressID.clone(),
             },
         );
+    }
 
-        cache.set_myfile_ids(VolumeShareNodeIDs {
-            ShareID: share.ShareID.clone(),
-            VolumeID: share.VolumeID.clone(),
-            RootNodeId: share.RootNodeId.clone(),
-        });
+    pub(crate) async fn get_photos_share_ids<'c>(
+        &'c self,
+        cache: &'c Cache<PGPProv>,
+        crypto: &'c Crypto<PGPProv, SRPProv>,
+        remote_client: &'c crate::remote::Client,
+    ) -> Result<&'c VolumeShareNodeIDs> {
+        if cache.photos_share_ids().is_none() {
+            let encrypted_share = remote_client.get_photos_share().await?;
+            let (share, key) = crypto.decrypt_root_share(&encrypted_share, cache)?;
+            Self::insert_share_cache(&encrypted_share, &share, key, cache);
+            cache.set_photos_share_ids(VolumeShareNodeIDs {
+                ShareID: share.ShareID.clone(),
+                VolumeID: share.VolumeID.clone(),
+                RootNodeId: share.RootNodeId.clone(),
+            });
+        }
+
+        cache
+            .photos_share_ids()
+            .ok_or(crate::errors::APIError::Account(
+                "Photo IDs not initialized".to_owned(),
+            ))
     }
 
     pub(crate) async fn get_myfiles_ids<'c>(
@@ -59,13 +77,16 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             let encrypted_share = remote_client.get_myfiles().await?;
             let (share, key) = crypto.decrypt_root_share(&encrypted_share, cache)?;
             Self::insert_share_cache(&encrypted_share, &share, key, cache);
+            cache.set_myfile_ids(VolumeShareNodeIDs {
+                ShareID: share.ShareID.clone(),
+                VolumeID: share.VolumeID.clone(),
+                RootNodeId: share.RootNodeId.clone(),
+            });
         }
 
-        cache
-            .myfiles_ids()
-            .ok_or(crate::errors::APIError::Account(
-                "My files IDs not initialized".to_owned(),
-            ))
+        cache.myfiles_ids().ok_or(crate::errors::APIError::Account(
+            "My files IDs not initialized".to_owned(),
+        ))
     }
 }
 
