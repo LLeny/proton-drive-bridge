@@ -3,7 +3,6 @@ mod proton_login_page;
 mod server_page;
 mod session_page;
 
-use std::fmt::Debug;
 use crate::app::none::NonePage;
 use crate::app::proton_login_page::{ProtonLoginPage, ProtonLoginPageMessage};
 use crate::app::server_page::{ServerPage, ServerPageMessage};
@@ -11,6 +10,7 @@ use crate::app::session_page::{SessionPage, SessionPageMessage};
 use crate::config::{Config, DriveConfig, ServerConfig};
 use crate::keyring;
 use crate::vault::UnlockedVault;
+use std::fmt::Debug;
 
 use iced::Color;
 use iced::alignment::Vertical;
@@ -117,7 +117,7 @@ impl App {
             }
             Message::ServerConfigChanged(c) => return self.server_config_changed(c),
             Message::KeyPressed(k, m) => return self.manage_key(k, m),
-            Message::ResetConfig => return self.reset_session()
+            Message::ResetConfig => return self.reset_session(),
         }
 
         Task::none()
@@ -190,9 +190,7 @@ impl App {
             Ok(t) => t,
             Err(e) => {
                 error!("{e}");
-                return Task::done(Message::Error(
-                    format!("Couldn't lock vault, {e}"),
-                ));
+                return Task::done(Message::Error(format!("Couldn't lock vault, {e}")));
             }
         };
 
@@ -213,10 +211,13 @@ impl App {
         }
         Task::done(message)
     }
-    
+
     fn reset_session(&mut self) -> Task<Message> {
         self.config.drive = DriveConfig::default();
-        Task::done(Message::SaveConfig)
+        Task::batch(vec![
+            Task::done(Message::SaveConfig),
+            Task::done(Message::SessionPage),
+        ])
     }
 
     fn set_error(&mut self, error: String) {
@@ -313,7 +314,7 @@ impl Debug for Message {
             Self::KeyPressed(arg0, arg1) => {
                 f.debug_tuple("KeyPressed").field(arg0).field(arg1).finish()
             }
-            Self::ResetConfig => write!(f, "ResetConfig")
+            Self::ResetConfig => write!(f, "ResetConfig"),
         }
     }
 }
