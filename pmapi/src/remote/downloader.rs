@@ -220,7 +220,6 @@ impl StreamStatus {
     }
 }
 
-// TODO: Retry on error
 impl tokio::io::AsyncRead for FileDownloader {
     fn poll_read(
         self: Pin<&mut Self>,

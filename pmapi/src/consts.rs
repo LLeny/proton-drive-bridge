@@ -40,4 +40,5 @@ pub(crate) const MAX_THUMBNAIL_BORDER_LEN: u32 = 250;
 pub(crate) const NODEKEY_USER: &str = "Drive key";
 pub(crate) const NODEKEY_EMAIL: &str = "no-reply@proton.me";
 
-pub(crate) const _GENERAL_RETRY_DELAY_SECONDS: u16 = 1;
+pub(crate) const GENERAL_MAX_RETRY_DELAY_SECONDS: u64 = 60;
+pub(crate) const GENERAL_RETRY_SECONDS: u64 = 15 * 60;

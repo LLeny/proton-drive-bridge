@@ -27,7 +27,6 @@ use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 impl Client {
-    // TODO: Retry on error
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn upload_node_blocks<Reader, PGPProv, SRPProv>(
         &self,
