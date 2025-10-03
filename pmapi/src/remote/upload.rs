@@ -3,28 +3,31 @@ use crate::consts::{MAX_THUMBNAIL_BORDER_LEN, MAX_THUMBNAIL_SIZE};
 use crate::errors::Result;
 use crate::remote::api_session::RequestType;
 use crate::remote::payloads::{
-    BlockUpload, BlockUploadRequest, BlockUploadResponse, BlockUploadVerifier,
-    BlockVerificationData, CommitBlock, CommitDraftPhoto, CommitDraftRequest, CommitDraftResponse,
-    FileExtendedAttributesSchema, FileExtendedAttributesSchemaCommon,
+    BlockUploadRequest, BlockUploadResponse, CommitBlock, CommitDraftPhoto, CommitDraftRequest,
+    CommitDraftResponse, FileExtendedAttributesSchema, FileExtendedAttributesSchemaCommon,
     FileExtendedAttributesSchemaDigest, PrivateKey, ThumbnailType, ThumbnailUpload,
 };
+use crate::remote::worker::{APIWorker, WorkerTask};
 use crate::{
     client::crypto::Crypto,
     consts::{
-        DRIVE_BLOCK_UPLOAD_REQUEST_ENDPOINT, DRIVE_BLOCK_VERIFICATION_DATA_ENDPOINT,
-        DRIVE_COMMIT_REVISION_ENDPOINT, FILE_CHUNK_SIZE,
+        DRIVE_BLOCK_UPLOAD_REQUEST_ENDPOINT, DRIVE_COMMIT_REVISION_ENDPOINT, FILE_CHUNK_SIZE,
     },
     errors::APIError,
     remote::Client,
 };
 use chrono::{DateTime, Utc};
-use futures::TryFutureExt;
+use crossbeam::channel;
+use futures::future::join_all;
+use futures::{Stream, StreamExt, TryFutureExt};
+use itertools::Itertools;
 use proton_crypto::crypto::PGPProviderSync;
 use proton_crypto::srp::SRPProvider;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::sync::oneshot::{self, Receiver};
 
 impl Client {
     #[allow(clippy::too_many_arguments)]
@@ -46,9 +49,7 @@ impl Client {
         SRPProv: SRPProvider,
         Reader: AsyncRead + Send + Sync + Unpin + 'static,
     {
-        let mut total_uploaded: usize = 0;
         let mut block_index: usize = 1;
-        let mut blocks: Vec<CommitBlock> = Vec::new();
         let mut reader = reader;
         let mut manifest: Vec<u8> = vec![];
         let mut total_read: usize = 0;
@@ -56,14 +57,14 @@ impl Client {
         let address_key = address_key.to_pgp(crypto.get_pgp_provider())?;
         let is_image: bool = media_type.as_ref().is_some_and(|m| m.starts_with("image/"));
         let mut image_data: Vec<u8> = vec![];
+        let mut commit_rxs: Vec<oneshot::Receiver<Result<CommitBlock>>> = Vec::new();
 
-        loop {
-            let buf = Self::read_n(&mut reader, FILE_CHUNK_SIZE).await?;
+        while let Some(chunk) = Box::pin(Self::read_chunks(&mut reader, FILE_CHUNK_SIZE))
+            .next()
+            .await
+        {
+            let buf = chunk?;
             let n = buf.len();
-
-            if n == 0 {
-                break;
-            }
 
             if is_image {
                 image_data.extend_from_slice(&buf[..n]);
@@ -79,25 +80,28 @@ impl Client {
 
             manifest.extend(hash);
 
-            let block_token = self
-                .upload_block(
-                    revision_uid,
+            let commit_rx = self
+                .send_upload_work(
+                    revision_uid.to_owned(),
                     block_index,
-                    encrypted.as_slice(),
+                    encrypted,
                     hash.to_vec(),
                     address_id.clone(),
                     armored_signature,
                 )
                 .await?;
 
-            total_uploaded += encrypted.len();
-            blocks.push(CommitBlock {
-                Index: block_index,
-                Token: block_token,
-                Size: encrypted.len(),
-            });
+            commit_rxs.push(commit_rx);
+
             block_index += 1;
         }
+
+        let blocks: Vec<CommitBlock> = join_all(commit_rxs)
+            .await
+            .into_iter()
+            .map(|r| r.map_err(|e| APIError::Upload(e.to_string()))?)
+            .collect::<Result<Vec<_>>>()
+            .map_err(|e| APIError::Upload(e.to_string()))?;
 
         if is_image {
             let mut border_len = MAX_THUMBNAIL_BORDER_LEN;
@@ -152,7 +156,26 @@ impl Client {
         )
         .await?;
 
+        let total_uploaded = blocks.iter().map(|b| b.Size).sum();
+
         Ok(total_uploaded)
+    }
+
+    fn read_chunks<Reader>(
+        reader: &mut Reader,
+        chunk_size: usize,
+    ) -> impl Stream<Item = Result<Vec<u8>>>
+    where
+        Reader: AsyncRead + Send + Sync + Unpin + 'static,
+    {
+        async_stream::try_stream! {
+            while let Ok(buf) = Self::read_n(reader, chunk_size).await {
+                if buf.is_empty() {
+                    break;
+                }
+                yield buf;
+            }
+        }
     }
 
     async fn read_n<Reader>(reader: &mut Reader, bytes_to_read: usize) -> Result<Vec<u8>>
@@ -175,51 +198,6 @@ impl Client {
 
         buf.truncate(filled);
         Ok(buf)
-    }
-
-    async fn upload_block(
-        &self,
-        revision_uid: &str,
-        block_index: usize,
-        encrypted_data: impl AsRef<[u8]>,
-        hash: Vec<u8>,
-        address_id: String,
-        armored_signature: String,
-    ) -> Result<String> {
-        let verification_data = self.get_verification_data(revision_uid).await?;
-        let verification_token: Vec<u8> = verification_data
-            .VerificationCode
-            .into_iter()
-            .enumerate()
-            .map(|(i, value)| value ^ encrypted_data.as_ref().get(i).unwrap_or(&0))
-            .collect();
-
-        let url = self
-            .get_block_upload_url(
-                revision_uid,
-                address_id,
-                block_index,
-                encrypted_data.as_ref().len(),
-                hash,
-                armored_signature,
-                verification_token,
-            )
-            .await?;
-
-        let upload_link = url
-            .UploadLinks
-            .first()
-            .ok_or(APIError::Upload("Coudln't retrieve upload url.".to_owned()))?;
-
-        self.api_session
-            .post_multipart_form_data(
-                &upload_link.URL,
-                &upload_link.Token,
-                encrypted_data.as_ref(),
-            )
-            .await?;
-
-        Ok(upload_link.Token.clone())
     }
 
     pub(crate) async fn upload_thumbnail(
@@ -252,67 +230,6 @@ impl Client {
             .await?;
 
         Ok(upload_link.Token.clone())
-    }
-
-    async fn get_verification_data(
-        &self,
-        node_revision_uid: &str,
-    ) -> Result<BlockVerificationData> {
-        let (volume_id, node_id, revision_id) =
-            crate::uids::split_node_revision_uid(node_revision_uid)?;
-
-        let endpoint = DRIVE_BLOCK_VERIFICATION_DATA_ENDPOINT
-            .replace("{volume_id}", &volume_id)
-            .replace("{node_id}", &node_id)
-            .replace("{revision_id}", &revision_id);
-
-        let resp: BlockVerificationData = self
-            .api_session
-            .request_with_json_response(RequestType::Get, &endpoint, None::<&u8>)
-            .await?;
-
-        Ok(resp)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn get_block_upload_url(
-        &self,
-        node_revision_uid: &str,
-        address_id: String,
-        block_index: usize,
-        size: usize,
-        hash: Vec<u8>,
-        encrypted_signature: String,
-        verification_token: Vec<u8>,
-    ) -> Result<BlockUploadResponse> {
-        let (volume_id, node_id, revision_id) =
-            crate::uids::split_node_revision_uid(node_revision_uid)?;
-
-        let endpoint = DRIVE_BLOCK_UPLOAD_REQUEST_ENDPOINT;
-
-        let payload = BlockUploadRequest {
-            AddressID: address_id,
-            VolumeID: volume_id,
-            LinkID: node_id,
-            RevisionID: revision_id,
-            BlockList: vec![BlockUpload {
-                Index: block_index,
-                Hash: hash,
-                EncSignature: encrypted_signature,
-                Size: size,
-                Verifier: BlockUploadVerifier {
-                    Token: verification_token,
-                },
-            }],
-            ThumbnailList: vec![],
-        };
-
-        let resp: BlockUploadResponse = self
-            .api_session
-            .request_with_json_response(RequestType::Post, endpoint, Some(&payload))
-            .await?;
-
-        Ok(resp)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -369,7 +286,12 @@ impl Client {
             Common: Some(FileExtendedAttributesSchemaCommon {
                 ModificationTime: modification_time, // TODO from server
                 Size: original_size,
-                BlockSizes: blocks.as_ref().iter().map(|b| b.Size).collect(),
+                BlockSizes: blocks
+                    .as_ref()
+                    .iter()
+                    .sorted_by_key(|b| b.Index)
+                    .map(|b| b.Size)
+                    .collect(),
                 Digests: FileExtendedAttributesSchemaDigest { SHA1: sha1.clone() },
             }),
         };
@@ -425,5 +347,57 @@ impl Client {
                 "Failed to commit draft revision".to_owned(),
             ))
         }
+    }
+
+    async fn send_upload_work(
+        &self,
+        revision_uid: String,
+        block_index: usize,
+        encrypted_data: Vec<u8>,
+        hash: Vec<u8>,
+        address_id: String,
+        armored_signature: String,
+    ) -> Result<Receiver<Result<CommitBlock>>> {
+        if let Some(tx) = &self.workers_tx {
+            let (reply, commit_rx) = oneshot::channel();
+            let mut work = WorkerTask::UploadBlock {
+                reply,
+                revision_uid,
+                block_index,
+                encrypted_data,
+                hash,
+                address_id,
+                armored_signature,
+            };
+            loop {
+                match tx.try_send(work) {
+                    Ok(_) => return Ok(commit_rx),
+                    Err(channel::TrySendError::Full(w)) => {
+                        work = w;
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                    Err(channel::TrySendError::Disconnected(_)) => break,
+                }
+            }
+        }
+
+        Err(APIError::Upload(
+            "Workers not started. Can't send upload work.".to_owned(),
+        ))
+    }
+
+    pub(crate) fn start_workers(&mut self, worker_count: usize) {
+        let tokens = self
+            .api_session
+            .get_tokens()
+            .cloned()
+            .expect("API tokens must be set before starting workers");
+        let (workers_tx, rx) = channel::bounded(worker_count / 2);
+        for _ in 0..worker_count {
+            let worker = APIWorker::new(tokens.clone(), rx.clone());
+            tokio::spawn(async move { worker.run().await });
+        }
+        self.workers_tx = Some(workers_tx);
     }
 }

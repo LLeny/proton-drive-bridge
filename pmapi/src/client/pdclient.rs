@@ -45,9 +45,12 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         srp_provider: SRPProv,
         auth: AuthTokens,
         session_store: SessionStore,
+        worker_count: usize,
     ) -> Self {
+       
         let mut remote_client = remote::Client::new();
         remote_client.set_tokens(auth);
+        remote_client.start_workers(worker_count);
 
         Self {
             remote_client,
@@ -405,7 +408,13 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
 
         if self
             .photos
-            .add_photo_to_album(&album_node, photo_node, &self.cache, &self.crypto, &self.remote_client)
+            .add_photo_to_album(
+                &album_node,
+                photo_node,
+                &self.cache,
+                &self.crypto,
+                &self.remote_client,
+            )
             .await
             .is_ok()
         {

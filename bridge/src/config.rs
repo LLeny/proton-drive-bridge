@@ -1,5 +1,6 @@
 use crate::{APP_NAME, vault::LockedVault};
 use anyhow::{Result, anyhow};
+use log::error;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -29,6 +30,7 @@ pub(crate) struct ServerConfig {
     pub(crate) tls: bool,
     pub(crate) tls_cert: Option<PathBuf>,
     pub(crate) tls_key: Option<PathBuf>,
+    pub(crate) worker_count: usize,
 }
 
 impl Default for ServerConfig {
@@ -40,6 +42,7 @@ impl Default for ServerConfig {
             tls: false,
             tls_cert: None,
             tls_key: None,
+            worker_count: 4,
         }
     }
 }
@@ -49,7 +52,12 @@ impl Config {
         let config_file = Self::config_file()?;
         if config_file.exists() {
             let content = std::fs::read(config_file)?;
-            let cfg: Config = serde_json::from_slice(&content)?;
+            let cfg: Config = serde_json::from_slice(&content).unwrap_or_else(|e| {
+                error!("Couldn't parse config file, using default: {e}");
+                let cfg = Config::default();
+                let _ = cfg.save();
+                cfg
+            });
             Ok(cfg)
         } else {
             let cfg = Config::default();

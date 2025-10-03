@@ -297,8 +297,9 @@ where
         srp_provider: SRPProv,
         auth: AuthTokens,
         session_store: SessionStore,
+        worker_count: usize,
     ) -> Result<Self> {
-        let pm_client = PDClient::new(pgp_provider, srp_provider, auth, session_store);
+        let pm_client = PDClient::new(pgp_provider, srp_provider, auth, session_store, worker_count);
         let (pm_tx, pm_rx) = mpsc::channel::<PDCommand>(64);
 
         std::thread::Builder::new()

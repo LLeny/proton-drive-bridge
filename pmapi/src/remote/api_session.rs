@@ -25,6 +25,10 @@ impl APISession {
         }
     }
 
+    pub(crate) fn get_tokens(&self) -> Option<&AuthTokens> {
+        self.tokens.as_ref()
+    }
+
     pub(crate) fn set_tokens(&mut self, tokens: AuthTokens) {
         self.tokens = Some(tokens);
     }

@@ -39,6 +39,7 @@ pub enum ServerPageMessage {
     TLSKeyChanged(PathBuf),
     Start,
     ServerEvent(ServerThreadMessage),
+    WorkersChanged(usize),
 }
 
 pub(crate) struct ServerPage {
@@ -76,6 +77,10 @@ impl Page for ServerPage {
         match msg {
             ServerPageMessage::PortChanged(p) => {
                 self.config.port = p;
+                return Task::done(Message::ServerConfigChanged(self.config.clone()));
+            }
+            ServerPageMessage::WorkersChanged(w) => {
+                self.config.worker_count = w;
                 return Task::done(Message::ServerConfigChanged(self.config.clone()));
             }
             ServerPageMessage::Start => {

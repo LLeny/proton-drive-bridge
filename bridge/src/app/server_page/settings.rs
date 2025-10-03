@@ -37,6 +37,26 @@ impl ServerPage {
         .height(row_height)
         .into()
     }
+    
+    fn setting_workers(
+        &self,
+        header_width: Length,
+        row_height: Length,
+    ) -> iced::Element<'_, Message> {
+        row![
+            text("Upload workers")
+                .width(header_width)
+                .align_y(Vertical::Center)
+                .height(Length::Fill),
+            number_input(&self.config.worker_count, 1..=16, |p| {
+                Message::ServerPageMsg(ServerPageMessage::WorkersChanged(p))
+            })
+            .style(number_input::number_input::primary)
+            .step(1)
+        ]
+        .height(row_height)
+        .into()
+    }
 
     fn setting_greeting_row(
         &self,
@@ -171,6 +191,7 @@ impl ServerPage {
             self.setting_tls_row(header_width, row_height),
             self.setting_tls_cert_row(header_width, row_height),
             self.setting_tls_key_row(header_width, row_height),
+            self.setting_workers(header_width, row_height),
             self.setting_start_button(),
         ]
         .spacing(10)

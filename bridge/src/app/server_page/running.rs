@@ -259,7 +259,7 @@ async fn run_ftp_server_worker(
     let mut server_builder = libunftp::ServerBuilder::new(Box::new(move || {
         let pgp = proton_crypto::new_pgp_provider();
         let srp = proton_crypto::new_srp_provider();
-        ProtonDriveStorage::new(pgp, srp, auth.clone(), session_store.clone())
+        ProtonDriveStorage::new(pgp, srp, auth.clone(), session_store.clone(), config.worker_count)
             .expect("Couldn't initialize FTP Server")
     }))
     .greeting(greeting)

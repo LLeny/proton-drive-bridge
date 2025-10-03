@@ -59,6 +59,10 @@ pub struct Args {
     /// Path to TLS private key (PEM)
     #[arg(long = "key", requires = "tls")]
     pub key: Option<PathBuf>,
+
+    /// Number of upload/download workers (default: 4)
+    #[arg(long = "workercount", default_value_t = 4)]
+    pub worker_count: usize,
 }
 
 pub async fn run(args: Args) -> Result<()> {
@@ -247,7 +251,7 @@ async fn run_server(tokens: AuthTokens, session_store: SessionStore, args: Args)
     let mut server_builder = ServerBuilder::new(Box::new(move || {
         let pgp = proton_crypto::new_pgp_provider();
         let srp = proton_crypto::new_srp_provider();
-        ProtonDriveStorage::new(pgp, srp, tokens.clone(), session_store.clone())
+        ProtonDriveStorage::new(pgp, srp, tokens.clone(), session_store.clone(), args.worker_count)
             .expect("Couldn't initialize FTP Server")
     }))
     .greeting(greeting_static)
