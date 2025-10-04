@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  bridge:
+    build:
+      dockerfile: ./docker/bridge.Dockerfile
+      context: ../
+    ports:
+      - "2121:2121"
+      - "49000-49100:49000-49100" # Passive FTP port range
+    #stdin_open: true # interactive mode
+    #tty: true        # interactive mode

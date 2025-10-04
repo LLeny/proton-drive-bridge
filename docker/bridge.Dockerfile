@@ -16,13 +16,13 @@ COPY unftp-sbe-pd/src/ ./unftp-sbe-pd/src/
 COPY unftp-sbe-pd/Cargo.toml ./unftp-sbe-pd/
 COPY users.json ./
 
-RUN RUSTFLAGS='-C target-cpu=native' cargo build --locked --target-dir ./build --release
+RUN RUSTFLAGS='-C target-cpu=native' cargo build --locked --target-dir ./build --release --no-default-features
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get -y --no-install-recommends install ca-certificates libsodium23 libdbus-1-3 && apt-get clean autoclean && rm -rf /var/lib/{apt,dpkg,cache,log}/
+RUN apt-get update && apt-get -y --no-install-recommends install ca-certificates libdbus-1-3 && apt-get clean autoclean && rm -rf /var/lib/{apt,dpkg,cache,log}/
 COPY --from=build /app/build/release/proton-drive-bridge /usr/bin/proton-drive-bridge
 COPY --from=build /app/users.json /app/
 
 WORKDIR /app
 
-CMD ["/usr/bin/proton-drive-bridge"]
+CMD ["/usr/bin/proton-drive-bridge", "--cli"]
