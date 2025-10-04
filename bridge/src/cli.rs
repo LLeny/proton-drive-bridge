@@ -86,68 +86,54 @@ fn parse_port_range(range_str: &str) -> Result<std::ops::RangeInclusive<u16>> {
         .parse()
         .map_err(|_| anyhow!("Invalid passive end port in range"))?;
     if start >= end || start < 1024 {
-        return Err(anyhow!("Passive port range must be between 1024 and 65535 and start < end"));
+        return Err(anyhow!(
+            "Passive port range must be between 1024 and 65535 and start < end"
+        ));
     }
     Ok(start..=end)
 }
 
 pub async fn run(args: Args) -> Result<()> {
     let mut cfg = Config::initialize().context("failed to load config")?;
-
-    let salted_password: Password;
     let mut unlocked_vault: Option<UnlockedVault> = None;
+    let mut salted_pass: Password;
 
-    if keyring::get_key().is_err() {
-        println!("[bridge] No existing session found. Creating a new bridge session...");
-        salted_password = create_bridge_session_password(&cfg)?;
-    } else {
+    loop {
         println!("[bridge] Unlocking existing bridge session...");
-        let mut tried_password = false;
-        loop {
-            let pass = if !tried_password {
-                if let Some(p) = args.session_password.clone() {
-                    tried_password = true;
-                    p
-                } else {
-                    prompt_password("Bridge session password: ")?
-                }
-            } else {
-                prompt_password("Bridge session password: ")?
-            };
-            let srp = proton_crypto::new_srp_provider();
-            let salted = srp
-                .mailbox_password(pass.trim().as_bytes(), cfg.drive.salt)
-                .map_err(|e| anyhow!(e.to_string()))?;
-            let salted_vec = salted.as_ref().to_vec();
 
-            if let Ok(u) = cfg.drive.vault.unlock(&salted_vec) {
-                println!("[bridge] Session unlocked.");
-                unlocked_vault = Some(u);
-                salted_password = Password(salted_vec);
+        let pass = get_bridge_session_password(&args);
+
+        let salted = proton_crypto::new_srp_provider()
+            .mailbox_password(pass, cfg.drive.salt)
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        salted_pass = Password(salted.as_ref().to_vec());
+
+        if let Ok(u) = cfg.drive.vault.unlock(&salted_pass.0) {
+            println!("[bridge] Session unlocked.");
+            unlocked_vault = Some(u);
+            break;
+        }
+
+        eprintln!("[bridge] Wrong session password.");
+        print!("[bridge] Try again (t), Reset session (r), or Quit (q)? [t]: ");
+        io::stdout().flush().ok();
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice).ok();
+
+        match choice.trim().to_lowercase().as_str() {
+            "r" | "reset" => {
+                println!("[bridge] Resetting bridge session...");
+                keyring::generate_new_key(&salted_pass.0)?;
+                cfg.drive.vault = LockedVault::default();
+                cfg.save().ok();
                 break;
             }
-
-            eprintln!("[bridge] Wrong session password.");
-            print!("[bridge] Try again (t), Reset session (r), or Quit (q)? [t]: ");
-            io::stdout().flush().ok();
-            let mut choice = String::new();
-            io::stdin().read_line(&mut choice).ok();
-            match choice.trim().to_lowercase().as_str() {
-                "r" | "reset" => {
-                    println!("[bridge] Resetting bridge session...");
-                    keyring::clear_key().ok();
-                    cfg.drive.vault = LockedVault::default();
-                    cfg.save().ok();
-                    salted_password = create_bridge_session_password(&cfg)?;
-                    unlocked_vault = None;
-                    break;
-                }
-                "q" | "quit" | "n" | "no" => {
-                    println!("[bridge] Aborting as requested.");
-                    return Ok(());
-                }
-                _ => (),
+            "q" | "quit" | "n" | "no" => {
+                println!("[bridge] Aborting as requested.");
+                return Ok(());
             }
+            _ => (),
         }
     }
 
@@ -156,37 +142,39 @@ pub async fn run(args: Args) -> Result<()> {
         match refresh_from_vault(&unlocked).await {
             Ok((t, s)) => {
                 println!("[bridge] Token refresh successful.");
-                save_to_vault(&mut cfg, &salted_password, &t, &s)?;
+                save_to_vault(&mut cfg, &salted_pass, &t, &s)?;
                 (t, s)
             }
             Err(e) => {
                 eprintln!("[bridge] Token refresh failed: {e}. Proceeding with full login.");
-                login_and_initialize(&args, &salted_password, &mut cfg).await?
+                login_and_initialize(&args, &salted_pass, &mut cfg).await?
             }
         }
     } else {
         println!("[bridge] Logging into Proton...");
-        login_and_initialize(&args, &salted_password, &mut cfg).await?
+        login_and_initialize(&args, &salted_pass, &mut cfg).await?
     };
 
     println!("[bridge] Starting FTP server on port {}...", args.port);
     run_server(tokens, session_store, args).await
 }
 
-fn create_bridge_session_password(cfg: &Config) -> Result<Password> {
-    println!("[bridge] Create bridge session password (input hidden)");
-    let pass1 = prompt_password("Create bridge session password: ")?;
-    let pass2 = prompt_password("Confirm bridge session password: ")?;
-    if pass1 != pass2 {
-        return Err(anyhow!("Passwords do not match"));
+fn get_bridge_session_password(args: &Args) -> String {
+    if let Some(p) = args.session_password.clone() {
+        p
+    } else {
+        println!("[bridge] Create bridge session password (input hidden)");
+        loop {
+            let pass1 = prompt_password("Create bridge session password: ")
+                .expect("failed to read password");
+            let pass2 = prompt_password("Confirm bridge session password: ")
+                .expect("failed to read password");
+            if pass1 == pass2 {
+                break pass1;
+            }
+            println!("Passwords do not match, try again.");
+        }
     }
-    let srp = proton_crypto::new_srp_provider();
-    let salted = srp
-        .mailbox_password(pass1.trim().as_bytes(), cfg.drive.salt)
-        .map_err(|e| anyhow!(e.to_string()))?;
-    let salted = salted.as_ref().to_vec();
-    keyring::generate_new_key(&salted)?;
-    Ok(Password(salted))
 }
 
 async fn refresh_from_vault(unlocked: &UnlockedVault) -> Result<(AuthTokens, SessionStore)> {
@@ -290,8 +278,14 @@ async fn run_server(tokens: AuthTokens, session_store: SessionStore, args: Args)
     let mut server_builder = ServerBuilder::new(Box::new(move || {
         let pgp = proton_crypto::new_pgp_provider();
         let srp = proton_crypto::new_srp_provider();
-        ProtonDriveStorage::new(pgp, srp, tokens.clone(), session_store.clone(), args.worker_count)
-            .expect("Couldn't initialize FTP Server")
+        ProtonDriveStorage::new(
+            pgp,
+            srp,
+            tokens.clone(),
+            session_store.clone(),
+            args.worker_count,
+        )
+        .expect("Couldn't initialize FTP Server")
     }))
     .passive_ports(port_range)
     .greeting(greeting_static)
