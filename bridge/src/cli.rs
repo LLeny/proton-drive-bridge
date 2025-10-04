@@ -68,6 +68,10 @@ pub struct Args {
     /// Passive mode port range (default: 49000-49100)
     #[arg(long = "passiveports", default_value = "49000-49100")]
     passive_ports: String,
+
+    /// Session password (for bridge session unlock)
+    #[arg(long = "sessionpassword", env = "PROTON_SESSION_PASSWORD")]
+    pub session_password: Option<String>,
 }
 
 fn parse_port_range(range_str: &str) -> Result<std::ops::RangeInclusive<u16>> {
@@ -98,8 +102,18 @@ pub async fn run(args: Args) -> Result<()> {
         salted_password = create_bridge_session_password(&cfg)?;
     } else {
         println!("[bridge] Unlocking existing bridge session...");
+        let mut tried_password = false;
         loop {
-            let pass = prompt_password("Bridge session password: ")?;
+            let pass = if !tried_password {
+                if let Some(p) = args.session_password.clone() {
+                    tried_password = true;
+                    p
+                } else {
+                    prompt_password("Bridge session password: ")?
+                }
+            } else {
+                prompt_password("Bridge session password: ")?
+            };
             let srp = proton_crypto::new_srp_provider();
             let salted = srp
                 .mailbox_password(pass.trim().as_bytes(), cfg.drive.salt)

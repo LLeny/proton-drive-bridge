@@ -70,11 +70,13 @@ proton-drive-bridge --cli [OPTIONS]
 - `--cert <CERT>`: Path to certificate file (PEM format, required with --tls)
 - `--key <KEY>`: Path to private key file (PEM format, required with --tls)
 - `-c, --cli`: Run in CLI mode (no UI). Short form `-c` is accepted.
+- `--sessionpassword <SESSION_PASSWORD>`: Bridge session password (or set `PROTON_SESSION_PASSWORD` environment variable)
 - `--workercount <WORKER_COUNT>`: Number of upload/download workers (default: 4)
 - `--passiveports <PORT_RANGE>`: Passive mode port range (default: 49000-49100)
 
 Notes:
 - In CLI mode, if `--username/--password` (or `PROTON_USERNAME/PROTON_PASSWORD`) are not provided, you will be prompted interactively on stdin.
+- If `--sessionpassword` (or `PROTON_SESSION_PASSWORD`) is provided, it will be used to unlock the bridge session vault without prompting.
 - When using `--tls`, both `--cert` and `--key` must be provided.
 
 ### Example
@@ -141,6 +143,7 @@ proton-drive-bridge --cli --auth-file /path/to/users.json
 
 - `PROTON_USERNAME`: Your Proton account email
 - `PROTON_PASSWORD`: Your Proton account password
+- `PROTON_SESSION_PASSWORD`: Bridge session password (used to unlock the local session vault)
 
 ## Proton Drive Photos Share
 
