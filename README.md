@@ -70,6 +70,8 @@ proton-drive-bridge --cli [OPTIONS]
 - `--cert <CERT>`: Path to certificate file (PEM format, required with --tls)
 - `--key <KEY>`: Path to private key file (PEM format, required with --tls)
 - `-c, --cli`: Run in CLI mode (no UI). Short form `-c` is accepted.
+- `--workercount <WORKER_COUNT>`: Number of upload/download workers (default: 4)
+- `--passiveports <PORT_RANGE>`: Passive mode port range (default: 49000-49100)
 
 Notes:
 - In CLI mode, if `--username/--password` (or `PROTON_USERNAME/PROTON_PASSWORD`) are not provided, you will be prompted interactively on stdin.
