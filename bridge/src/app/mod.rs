@@ -8,10 +8,9 @@ use crate::app::proton_login_page::{ProtonLoginPage, ProtonLoginPageMessage};
 use crate::app::server_page::{ServerPage, ServerPageMessage};
 use crate::app::session_page::{SessionPage, SessionPageMessage};
 use crate::config::{Config, DriveConfig, ServerConfig};
-use crate::keyring;
+use crate::keyring::keyring;
 use crate::vault::UnlockedVault;
 use std::fmt::Debug;
-
 use iced::Color;
 use iced::alignment::Vertical;
 use iced::keyboard::Modifiers;

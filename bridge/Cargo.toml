@@ -25,14 +25,17 @@ clap = { version = "4.5.47", features = ["derive", "env"] }
 anyhow = { version = "1.0.72" }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"], optional = true }
 dirs = { version = "6.0.0" }
-iced = { version = "0.13.1", features = ["advanced", "tokio", "lazy" ] }
-iced_aw = { version = "0.12.2", default-features = false, features = ["number_input"]}
-iced_table = { version = "0.13.0", git = "https://github.com/tarkah/iced_table.git" }
-rfd = { version = "0.15.4" }
+iced = { version = "0.13.1", features = ["advanced", "tokio", "lazy" ], optional = true }
+iced_aw = { version = "0.12.2", default-features = false, features = ["number_input"], optional = true }
+iced_table = { version = "0.13.0", git = "https://github.com/tarkah/iced_table.git", optional = true }
+rfd = { version = "0.15.4", optional = true }
 rpassword = { version = "7.3.1" }
 
 [features]
-default = [ "keyring" ]
+default = [ "keyring", "desktop" ]
 keyring = [ "dep:keyring" ]
+desktop = [ "dep:iced", "dep:iced_aw", "dep:iced_table", "dep:rfd" ]
+
 [lints]
 workspace = true
+

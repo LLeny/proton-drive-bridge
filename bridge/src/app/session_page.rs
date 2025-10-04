@@ -1,4 +1,7 @@
-use crate::app::{Message, Page, ZeroingString, ZeroingVec};
+use crate::{
+    app::{Message, Page, ZeroingString, ZeroingVec},
+    keyring::keyring,
+};
 use anyhow::Result;
 use iced::{
     Color, Event, Length, Task,
@@ -32,7 +35,7 @@ impl SessionPage {
             pass1: ZeroingString::default(),
             pass2: ZeroingString::default(),
             can_validate: false,
-            new_session: crate::keyring::get_key().is_err(),
+            new_session: keyring::get_key().is_err(),
         }
     }
 
@@ -55,7 +58,7 @@ impl SessionPage {
             Err(e) => return Task::done(Message::Error(e.to_string())),
         };
 
-        if let Err(e) = crate::keyring::generate_new_key(&salted_password) {
+        if let Err(e) = keyring::generate_new_key(&salted_password) {
             return Task::done(Message::Error(e.to_string()));
         }
 
@@ -72,12 +75,11 @@ impl SessionPage {
     }
 
     fn delete_session(&mut self) -> Task<Message> {
-
-        match crate::keyring::clear_key() {
+        match keyring::clear_key() {
             Ok(()) => {
                 self.new_session = true;
                 Task::done(Message::ResetConfig)
-            },
+            }
             Err(e) => Task::done(Message::Error(e.to_string())),
         }
     }
