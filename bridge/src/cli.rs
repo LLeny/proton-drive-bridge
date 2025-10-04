@@ -64,6 +64,27 @@ pub struct Args {
     /// Number of upload/download workers (default: 4)
     #[arg(long = "workercount", default_value_t = 4)]
     pub worker_count: usize,
+
+    /// Passive mode port range (default: 49000-49100)
+    #[arg(long = "passiveports", default_value = "49000-49100")]
+    passive_ports: String,
+}
+
+fn parse_port_range(range_str: &str) -> Result<std::ops::RangeInclusive<u16>> {
+    let parts: Vec<&str> = range_str.split('-').collect();
+    if parts.len() != 2 {
+        return Err(anyhow!("Invalid passive port range format"));
+    }
+    let start: u16 = parts[0]
+        .parse()
+        .map_err(|_| anyhow!("Invalid passive start port in range"))?;
+    let end: u16 = parts[1]
+        .parse()
+        .map_err(|_| anyhow!("Invalid passive end port in range"))?;
+    if start >= end || start < 1024 {
+        return Err(anyhow!("Passive port range must be between 1024 and 65535 and start < end"));
+    }
+    Ok(start..=end)
 }
 
 pub async fn run(args: Args) -> Result<()> {
@@ -249,12 +270,16 @@ async fn run_server(tokens: AuthTokens, session_store: SessionStore, args: Args)
 
     let greeting_static: &'static str = Box::leak(greeting.into_boxed_str());
 
+    let port_range = parse_port_range(&args.passive_ports)
+        .context("failed to parse passive ports range, expected format: start-end")?;
+
     let mut server_builder = ServerBuilder::new(Box::new(move || {
         let pgp = proton_crypto::new_pgp_provider();
         let srp = proton_crypto::new_srp_provider();
         ProtonDriveStorage::new(pgp, srp, tokens.clone(), session_store.clone(), args.worker_count)
             .expect("Couldn't initialize FTP Server")
     }))
+    .passive_ports(port_range)
     .greeting(greeting_static)
     .idle_session_timeout(86400);
 

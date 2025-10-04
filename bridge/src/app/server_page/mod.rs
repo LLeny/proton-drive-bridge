@@ -29,6 +29,8 @@ enum ServerStatus {
 #[derive(Clone, Debug)]
 pub enum ServerPageMessage {
     PortChanged(u16),
+    PassivePortLoChanged(u16),
+    PassivePortHiChanged(u16),
     GreetingChanged(String),
     AuthJsonPick,
     AuthJsonChanged(PathBuf),
@@ -78,6 +80,24 @@ impl Page for ServerPage {
             ServerPageMessage::PortChanged(p) => {
                 self.config.port = p;
                 return Task::done(Message::ServerConfigChanged(self.config.clone()));
+            }
+            ServerPageMessage::PassivePortLoChanged(p) => {
+                let hi = *self.config.passive_ports.end();
+                if (1024..=hi).contains(&p) {
+                    self.config.passive_ports = p..=hi;
+                    return Task::done(Message::ServerConfigChanged(self.config.clone()));
+                } else {
+                    return Task::done(Message::Error("Invalid port range".to_string()));
+                }
+            }
+            ServerPageMessage::PassivePortHiChanged(p) => {
+                let lo = *self.config.passive_ports.start();
+                if p > lo {
+                    self.config.passive_ports = lo..=p;
+                    return Task::done(Message::ServerConfigChanged(self.config.clone()));
+                } else {
+                    return Task::done(Message::Error("Invalid port range".to_string()));
+                }
             }
             ServerPageMessage::WorkersChanged(w) => {
                 self.config.worker_count = w;

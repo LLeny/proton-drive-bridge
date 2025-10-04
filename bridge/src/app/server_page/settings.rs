@@ -38,6 +38,31 @@ impl ServerPage {
         .into()
     }
     
+    fn setting_passive_ports_row(
+        &self,
+        header_width: Length,
+        row_height: Length,
+    ) -> iced::Element<'_, Message> {
+        row![
+            text("Passive ports")
+                .width(header_width)
+                .align_y(Vertical::Center)
+                .height(Length::Fill),
+            number_input(self.config.passive_ports.start(), 1..=u16::MAX, |p| {
+                Message::ServerPageMsg(ServerPageMessage::PassivePortLoChanged(p))
+            })
+            .style(number_input::number_input::primary)
+            .step(1),
+            number_input(self.config.passive_ports.end(), 1..=u16::MAX, |p| {
+                Message::ServerPageMsg(ServerPageMessage::PassivePortHiChanged(p))
+            })
+            .style(number_input::number_input::primary)
+            .step(1)
+        ]
+        .height(row_height)
+        .into()
+    }
+
     fn setting_workers(
         &self,
         header_width: Length,
@@ -186,6 +211,7 @@ impl ServerPage {
 
         let content = column![
             self.setting_port_row(header_width, row_height),
+            self.setting_passive_ports_row(header_width, row_height),
             self.setting_greeting_row(header_width, row_height),
             self.setting_auth_json_row(header_width, row_height),
             self.setting_tls_row(header_width, row_height),

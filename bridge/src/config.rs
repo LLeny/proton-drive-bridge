@@ -2,7 +2,7 @@ use crate::{APP_NAME, vault::LockedVault};
 use anyhow::{Result, anyhow};
 use log::error;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{ops::RangeInclusive, path::PathBuf};
 
 #[derive(Default, Deserialize, Serialize, Debug)]
 pub(crate) struct Config {
@@ -31,6 +31,7 @@ pub(crate) struct ServerConfig {
     pub(crate) tls_cert: Option<PathBuf>,
     pub(crate) tls_key: Option<PathBuf>,
     pub(crate) worker_count: usize,
+    pub(crate) passive_ports: RangeInclusive<u16>,
 }
 
 impl Default for ServerConfig {
@@ -43,6 +44,7 @@ impl Default for ServerConfig {
             tls_cert: None,
             tls_key: None,
             worker_count: 4,
+            passive_ports: 49000..=49100,
         }
     }
 }

@@ -264,6 +264,7 @@ async fn run_ftp_server_worker(
     }))
     .greeting(greeting)
     .idle_session_timeout(86400)
+    .passive_ports(config.passive_ports)
     .notify_presence(presence_notif)
     .notify_data(data_notif);
 
