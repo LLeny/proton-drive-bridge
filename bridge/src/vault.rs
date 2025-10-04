@@ -1,3 +1,4 @@
+use crate::keyring::*;
 use anyhow::Result;
 use pmapi::client::{authenticator::AuthTokens, session_store::SessionStore};
 use proton_crypto::crypto::{
@@ -36,7 +37,7 @@ impl LockedVault {
     /// This function does not panic.
     pub fn unlock(&self, salted_password: impl AsRef<[u8]>) -> Result<UnlockedVault> {
         let pgp = proton_crypto::new_pgp_provider();
-        let priv_key_data = crate::keyring::get_key()?;
+        let priv_key_data = keyring::get_key()?;
 
         let priv_key = pgp.private_key_import(
             priv_key_data,
@@ -69,7 +70,7 @@ impl UnlockedVault {
     /// This function does not panic.
     pub fn lock(&self, salted_password: impl AsRef<[u8]>) -> Result<LockedVault> {
         let pgp = proton_crypto::new_pgp_provider();
-        let priv_key_data = crate::keyring::get_key()?;
+        let priv_key_data = keyring::get_key()?;
 
         let priv_key = pgp.private_key_import(
             priv_key_data,

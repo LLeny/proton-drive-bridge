@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::keyring::keyring;
 use crate::vault::{LockedVault, UnlockedVault};
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
@@ -71,7 +72,7 @@ pub async fn run(args: Args) -> Result<()> {
     let salted_password: Password;
     let mut unlocked_vault: Option<UnlockedVault> = None;
 
-    if crate::keyring::get_key().is_err() {
+    if keyring::get_key().is_err() {
         println!("[bridge] No existing session found. Creating a new bridge session...");
         salted_password = create_bridge_session_password(&cfg)?;
     } else {
@@ -99,7 +100,7 @@ pub async fn run(args: Args) -> Result<()> {
             match choice.trim().to_lowercase().as_str() {
                 "r" | "reset" => {
                     println!("[bridge] Resetting bridge session...");
-                    crate::keyring::clear_key().ok();
+                    keyring::clear_key().ok();
                     cfg.drive.vault = LockedVault::default();
                     cfg.save().ok();
                     salted_password = create_bridge_session_password(&cfg)?;
@@ -149,7 +150,7 @@ fn create_bridge_session_password(cfg: &Config) -> Result<Password> {
         .mailbox_password(pass1.trim().as_bytes(), cfg.drive.salt)
         .map_err(|e| anyhow!(e.to_string()))?;
     let salted = salted.as_ref().to_vec();
-    crate::keyring::generate_new_key(&salted)?;
+    keyring::generate_new_key(&salted)?;
     Ok(Password(salted))
 }
 
