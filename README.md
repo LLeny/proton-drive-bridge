@@ -31,27 +31,6 @@ For best results:
   - `PUT` - Upload file
 - Proton Drive Photos share mapped
 
-## Prerequisites
-
-- Rust (latest stable version recommended)
-- Docker (for containerized deployment)
-- Proton account
-
-## Building from Source
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/LLeny/proton-drive-bridge.git
-   cd proton-drive-bridge
-   ```
-
-2. Build the project:
-   ```bash
-   cargo build --release
-   ```
-
-The binary will be available at `target/release/proton-drive-bridge`
-
 ## Usage
 
 ### Command Line
@@ -152,6 +131,27 @@ proton-drive-bridge --cli --auth-file /path/to/users.json
 - **Albums cannot be nested:** You cannot create albums inside other albums (only one level of albums is supported).
 - When you upload a photo to an album, it will **also be uploaded to `/drive_photos`**.
 - When you delete a photo from an album, it will **also be deleted from `/drive_photos`**.
+
+## Building from Source
+
+### Prerequisites
+
+- Rust (latest stable version recommended)
+- Go
+
+
+Clone the repository:
+   ```bash
+   git clone https://github.com/LLeny/proton-drive-bridge.git
+   cd proton-drive-bridge
+   ```
+
+Build the project:
+   ```bash
+   cargo build --release
+   ```
+
+The binary will be available at `target/release/proton-drive-bridge`
 
 ## Security Notes
 
