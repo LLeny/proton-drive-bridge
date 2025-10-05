@@ -61,7 +61,7 @@ pub struct Args {
     #[arg(long = "key", requires = "tls")]
     pub key: Option<PathBuf>,
 
-    /// Number of upload/download workers (default: 4)
+    /// Number of download/upload workers (default: 4)
     #[arg(long = "workercount", default_value_t = 4)]
     pub worker_count: usize,
 

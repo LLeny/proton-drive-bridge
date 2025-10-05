@@ -6,17 +6,19 @@ use crate::{
         api_session::{APISession, RequestType},
         payloads::{
             BlockUpload, BlockUploadRequest, BlockUploadResponse, BlockUploadVerifier,
-            BlockVerificationData, CommitBlock,
+            BlockVerificationData, CommitBlock, NodeBlock,
         },
     },
 };
-use crossbeam::channel;
-use log::info;
+use base64::Engine;
+use log::{error, info};
+use proton_crypto::crypto::{Decryptor, DecryptorSync, PGPProviderSync, VerifiedData};
+use sha1::Digest;
 use tokio::sync::oneshot;
 
 pub(crate) struct APIWorker {
     api_session: APISession,
-    work_rx: channel::Receiver<WorkerTask>,
+    worker_rx: async_channel::Receiver<WorkerTask>,
 }
 
 pub(crate) enum WorkerTask {
@@ -29,22 +31,28 @@ pub(crate) enum WorkerTask {
         address_id: String,
         armored_signature: String,
     },
+    DownloadBlock {
+        reply: oneshot::Sender<Result<Vec<u8>>>,
+        block: NodeBlock,
+        session_key: Vec<u8>,
+        verification_key: Vec<u8>,
+    },
 }
 
 impl APIWorker {
-    pub(crate) fn new(tokens: AuthTokens, work_rx: channel::Receiver<WorkerTask>) -> Self {
+    pub(crate) fn new(tokens: AuthTokens, worker_rx: async_channel::Receiver<WorkerTask>) -> Self {
         let mut api_session =
             APISession::new(reqwest::Url::parse(crate::consts::URL_API_HOST).unwrap());
         api_session.set_tokens(tokens);
         Self {
             api_session,
-            work_rx,
+            worker_rx,
         }
     }
 
     pub(crate) async fn run(&self) {
         loop {
-            match self.work_rx.recv() {
+            match self.worker_rx.recv().await {
                 Ok(task) => match task {
                     WorkerTask::UploadBlock {
                         reply,
@@ -55,8 +63,8 @@ impl APIWorker {
                         address_id,
                         armored_signature,
                     } => {
-                        let _ = reply.send(
-                            self.upload_block(
+                        let a = self
+                            .upload_block(
                                 &revision_uid,
                                 block_index,
                                 encrypted_data,
@@ -64,13 +72,91 @@ impl APIWorker {
                                 address_id,
                                 armored_signature,
                             )
-                            .await,
-                        );
+                            .await;
+                        let _ = reply.send(a);
+                    }
+                    WorkerTask::DownloadBlock {
+                        reply,
+                        block,
+                        session_key,
+                        verification_key,
+                    } => {
+                        let a = self
+                            .download_and_decrypt_block(block, &session_key, &verification_key)
+                            .await;
+                        let _ = reply.send(a);
                     }
                 },
-                Err(_) => break,
+                Err(_) => {
+                    error!("APIWorker channel closed.");
+                    break;
+                }
             }
         }
+    }
+
+    async fn download_and_decrypt_block(
+        &self,
+        block: NodeBlock,
+        session_key: &[u8],
+        verification_key: &[u8],
+    ) -> Result<Vec<u8>> {
+        let url = block
+            .URL
+            .as_ref()
+            .ok_or_else(|| APIError::Download("Missing block URL".to_owned()))?;
+
+        info!("Downloading block {} from {}", block.Index, url);
+
+        let encrypted_block = self
+            .api_session
+            .request::<()>(RequestType::Get, url, None)
+            .await?
+            .bytes()
+            .await
+            .map_err(APIError::Reqwest)?
+            .to_vec();
+
+        let sha = sha2::Sha256::digest(&encrypted_block);
+        let integrity = base64::prelude::BASE64_STANDARD.encode(sha) == block.Hash;
+        if !integrity {
+            return Err(APIError::Download(
+                "Block integrity check failed".to_owned(),
+            ));
+        }
+
+        let pgp_provider = proton_crypto::new_pgp_provider();
+
+        let session_key = pgp_provider
+            .session_key_import(
+                session_key,
+                proton_crypto::crypto::SessionKeyAlgorithm::Unknown,
+            )
+            .map_err(|e| APIError::PGP(format!("Couldn't import session key: {e}")))?;
+
+        let verification_key = pgp_provider
+            .public_key_import(verification_key, proton_crypto::crypto::DataEncoding::Armor)
+            .map_err(|e| APIError::PGP(format!("Couldn't import public key: {e}")))?;
+
+        let decryptor = pgp_provider
+            .new_decryptor()
+            .with_session_key_ref(&session_key)
+            .with_verification_key(&verification_key);
+
+        let decrypted_data = decryptor
+            .decrypt(encrypted_block, proton_crypto::crypto::DataEncoding::Bytes)
+            .map_err(|e| APIError::PGP(format!("Error decrypting block {}: {e}", block.Index)))?;
+
+        if !decrypted_data.is_verified() {
+            return Err(APIError::PGP(format!(
+                "Couldn't verify block {}",
+                block.Index
+            )));
+        }
+
+        info!("Downloaded block {}", block.Index);
+
+        Ok(decrypted_data.to_vec())
     }
 
     async fn upload_block(
@@ -105,12 +191,13 @@ impl APIWorker {
         let upload_link = url
             .UploadLinks
             .first()
-            .ok_or(APIError::Upload("Coudln't retrieve upload url.".to_owned()))?;
+            .ok_or(APIError::Upload("Couldn't retrieve upload url.".to_owned()))?;
 
         info!("Uploading block {} to {}", block_index, &upload_link.URL);
         self.api_session
             .post_multipart_form_data(&upload_link.URL, &upload_link.Token, &encrypted_data)
             .await?;
+        info!("Uploaded block {}", block_index);
 
         Ok(CommitBlock {
             Index: block_index,

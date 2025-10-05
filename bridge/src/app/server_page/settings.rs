@@ -69,7 +69,7 @@ impl ServerPage {
         row_height: Length,
     ) -> iced::Element<'_, Message> {
         row![
-            text("Upload workers")
+            text("Download/Upload workers")
                 .width(header_width)
                 .align_y(Vertical::Center)
                 .height(Length::Fill),

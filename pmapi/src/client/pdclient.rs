@@ -307,8 +307,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         buff.extend(verification_key.as_ref());
         let verification_key = buff.clone();
 
-        let downloader = FileDownloader::new(
-            self.remote_client.get_session(),
+        let downloader = self.remote_client.new_downloader(
             node_revision.UID.clone(),
             session_key,
             verification_key,
