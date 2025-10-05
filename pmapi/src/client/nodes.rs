@@ -217,6 +217,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         &'c self,
         parent_node_uid: String,
         file_name: &str,
+        is_in_photo_share: bool,
         reader: R,
         cache: &'c Cache<PGPProv>,
         crypto: &'c Crypto<PGPProv, SRPProv>,
@@ -302,7 +303,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .upload_node_blocks(
                 &node_draft.node_revision_uid,
                 user.Email.clone(),
-                name_params.MediaType,
+                is_in_photo_share,
                 &node_private_key,
                 &content_keys.content_key_packet_session_key,
                 &verification_key.private,

@@ -339,12 +339,20 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
                 .upload_photo_to_album(parent_node_uid, file_name, reader)
                 .await;
         }
+        
+        let photos_root_ids = self
+            .shares
+            .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
+            .await?;
+
+        let is_in_photo_share = make_node_uid(&photos_root_ids.VolumeID, &photos_root_ids.RootNodeId) == parent_node_uid;
 
         let (len, _) = self
             .nodes
             .upload_file(
                 parent_node_uid,
                 file_name,
+                is_in_photo_share,
                 reader,
                 &self.cache,
                 &self.crypto,

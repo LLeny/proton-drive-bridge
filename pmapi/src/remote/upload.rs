@@ -35,7 +35,7 @@ impl Client {
         &self,
         revision_uid: &str,
         signature_email: String,
-        media_type: Option<String>,
+        is_image: bool,
         node_key: &PGPProv::PrivateKey,
         session_key: &PGPProv::SessionKey,
         address_key: &PrivateKey,
@@ -55,7 +55,6 @@ impl Client {
         let mut total_read: usize = 0;
         let mut blocks_sha1 = Sha1::new();
         let address_key = address_key.to_pgp(crypto.get_pgp_provider())?;
-        let is_image: bool = media_type.as_ref().is_some_and(|m| m.starts_with("image/"));
         let mut image_data: Vec<u8> = vec![];
         let mut commit_rxs: Vec<oneshot::Receiver<Result<CommitBlock>>> = Vec::new();
 
@@ -151,7 +150,7 @@ impl Client {
             signature_email,
             manifest_signature,
             xattr,
-            media_type,
+            is_image,
             &sha1,
         )
         .await?;
@@ -309,7 +308,7 @@ impl Client {
         signature_email: String,
         manifest_signature: String,
         armored_xattr: String,
-        media_type: Option<String>,
+        is_image: bool,
         content_hash: &String,
     ) -> Result<()> {
         let (volume_id, node_id, revision_id) = crate::uids::split_node_revision_uid(revision_uid)?;
@@ -319,14 +318,16 @@ impl Client {
             .replace("{node_id}", &node_id)
             .replace("{revision_id}", &revision_id);
 
-        let photo = media_type
-            .filter(|mt| mt.starts_with("image/"))
-            .map(|_| CommitDraftPhoto {
+        let photo = if is_image {
+            Some(CommitDraftPhoto {
                 CaptureTime: chrono::Utc::now().timestamp(),
                 ContentHash: content_hash.clone(),
                 MainPhotoLinkID: None,
                 Tags: vec![],
-            });
+            })
+        } else {
+            None
+        };
 
         let payload = CommitDraftRequest {
             ManifestSignature: manifest_signature,
