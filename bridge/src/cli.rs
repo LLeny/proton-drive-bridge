@@ -16,7 +16,6 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use unftp_auth_jsonfile::JsonFileAuthenticator;
-use unftp_sbe_pd::ProtonDriveStorage;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -275,17 +274,13 @@ async fn run_server(tokens: AuthTokens, session_store: SessionStore, args: Args)
     let port_range = parse_port_range(&args.passive_ports)
         .context("failed to parse passive ports range, expected format: start-end")?;
 
+    let client_factory =
+        unftp_sbe_pd::factory::Factory::new(tokens, session_store, args.worker_count);
+
     let mut server_builder = ServerBuilder::new(Box::new(move || {
-        let pgp = proton_crypto::new_pgp_provider();
-        let srp = proton_crypto::new_srp_provider();
-        ProtonDriveStorage::new(
-            pgp,
-            srp,
-            tokens.clone(),
-            session_store.clone(),
-            args.worker_count,
-        )
-        .expect("Couldn't initialize FTP Server")
+        client_factory
+            .new_protondrive_storage_client()
+            .expect("Failed to create ProtonDriveStorage client")
     }))
     .passive_ports(port_range)
     .greeting(greeting_static)

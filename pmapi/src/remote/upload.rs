@@ -17,7 +17,6 @@ use crate::{
     remote::Client,
 };
 use chrono::{DateTime, Utc};
-use crossbeam::channel;
 use futures::future::join_all;
 use futures::{Stream, StreamExt, TryFutureExt};
 use itertools::Itertools;
@@ -27,7 +26,7 @@ use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::oneshot::{self, Receiver};
+use tokio::sync::oneshot;
 
 impl Client {
     #[allow(clippy::too_many_arguments)]
@@ -358,10 +357,10 @@ impl Client {
         hash: Vec<u8>,
         address_id: String,
         armored_signature: String,
-    ) -> Result<Receiver<Result<CommitBlock>>> {
+    ) -> Result<oneshot::Receiver<Result<CommitBlock>>> {
         if let Some(tx) = &self.workers_tx {
             let (reply, commit_rx) = oneshot::channel();
-            let mut work = WorkerTask::UploadBlock {
+            let work = WorkerTask::UploadBlock {
                 reply,
                 revision_uid,
                 block_index,
@@ -370,22 +369,15 @@ impl Client {
                 address_id,
                 armored_signature,
             };
-            loop {
-                match tx.try_send(work) {
-                    Ok(_) => return Ok(commit_rx),
-                    Err(channel::TrySendError::Full(w)) => {
-                        work = w;
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        continue;
-                    }
-                    Err(channel::TrySendError::Disconnected(_)) => break,
-                }
-            }
+            tx.send(work)
+                .await
+                .map_err(|e| APIError::Upload(e.to_string()))?;
+            Ok(commit_rx)
+        } else {
+            Err(APIError::Upload(
+                "Workers not started. Can't send upload work.".to_owned(),
+            ))
         }
-
-        Err(APIError::Upload(
-            "Workers not started. Can't send upload work.".to_owned(),
-        ))
     }
 
     pub(crate) fn start_workers(&mut self, worker_count: usize) {
@@ -394,7 +386,8 @@ impl Client {
             .get_tokens()
             .cloned()
             .expect("API tokens must be set before starting workers");
-        let (workers_tx, rx) = channel::bounded(worker_count / 2);
+
+        let (workers_tx, rx) = async_channel::bounded(worker_count / 2);
         for _ in 0..worker_count {
             let worker = APIWorker::new(tokens.clone(), rx.clone());
             tokio::spawn(async move { worker.run().await });

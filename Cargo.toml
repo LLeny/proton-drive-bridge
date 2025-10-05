@@ -27,7 +27,7 @@ async-trait = { version = "0.1.89" }
 chrono = { version = "0.4.42" }
 strum = { version = "0.27.2", features = ["derive"] }
 async-stream = { version = "0.3.6" }
-crossbeam = { version = "0.8.4" }
+async-channel = { version = "2.5.0" }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

@@ -26,7 +26,7 @@ elsa = { workspace = true }
 once_cell = { workspace = true }
 futures = { workspace = true }
 async-stream = { workspace = true }
-crossbeam = { workspace = true }
+async-channel = { workspace = true }
 reqwest = { version = "0.12.23", features = [ "json", "multipart" ] }
 base64 = { version = "0.22.1" }
 derivative = { version = "2.2.0" }

@@ -10,6 +10,7 @@ use crate::{
     remote::{self, downloader::FileDownloader},
     uids::make_node_uid,
 };
+use log::info;
 use proton_crypto::crypto::PGPProviderSync;
 
 #[derive(Debug)]
@@ -47,11 +48,10 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
         session_store: SessionStore,
         worker_count: usize,
     ) -> Self {
-       
+        info!("Creating new PD client with {worker_count} workers.");
         let mut remote_client = remote::Client::new();
         remote_client.set_tokens(auth);
         remote_client.start_workers(worker_count);
-
         Self {
             remote_client,
             crypto: Crypto::new(pgp_provider, srp_provider),
@@ -69,6 +69,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     /// Returns an error if fetching identifiers, nodes, or decrypting metadata fails,
     /// or if the remote API returns an error.
     pub async fn get_myfiles_root_folder(&self) -> Result<Node> {
+        info!("Fetching My Files root folder.");
         let ids = self
             .shares
             .get_myfiles_ids(&self.cache, &self.crypto, &self.remote_client)
@@ -91,6 +92,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     }
 
     pub async fn get_photos_root_folder(&self) -> Result<Node> {
+        info!("Fetching Photos root folder.");
         let ids = self
             .shares
             .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
@@ -118,6 +120,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     ///
     /// Returns an error if fetching the node from the API fails or if decryption fails.
     pub async fn get_node(&self, node_uid: &str) -> Result<Node> {
+        info!("Fetching node {}.", node_uid);
         let node = self
             .nodes
             .get_single_node(
@@ -137,6 +140,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     /// Returns an error if the rename operation fails remotely or if the node cannot
     /// be re-fetched/decrypted after the rename.
     pub async fn rename_node(&mut self, node_uid: &str, new_name: &str) -> Result<()> {
+        info!("Renaming node {} to {}.", node_uid, new_name);
         self.nodes
             .rename_single_node(
                 node_uid.to_owned(),
@@ -159,6 +163,10 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     /// Returns an error if the parent node cannot be retrieved, if creating the folder fails,
     /// or if the new folder cannot be fetched/decrypted.
     pub async fn create_folder(&self, parent_node_uid: String, folder_name: &str) -> Result<Node> {
+        info!(
+            "Creating folder {} in node {}.",
+            folder_name, parent_node_uid
+        );
         if let Ok(ids) = self
             .shares
             .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
@@ -199,6 +207,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     }
 
     async fn create_album(&self, album_name: &str) -> Result<Node> {
+        info!("Creating album {}.", album_name);
         let ids = self
             .shares
             .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
@@ -237,6 +246,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     ///
     /// Returns an error if fetching or decrypting child nodes fails.
     pub async fn folder_children(&self, parent_uid: &str) -> Result<Vec<Node>> {
+        info!("Fetching children of node {}.", parent_uid);
         Ok(self
             .nodes
             .get_node_children(parent_uid, &self.cache, &self.crypto, &self.remote_client)
@@ -256,6 +266,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     /// - Exporting cryptographic material fails.
     /// - Any remote API call fails.
     pub async fn get_node_downloader(&self, node_uid: &str) -> Result<FileDownloader> {
+        info!("Fetching downloader for node {}.", node_uid);
         let node = self
             .nodes
             .get_single_node(
@@ -331,6 +342,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     where
         R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
     {
+        info!("Uploading file {} to node {}.", file_name, parent_node_uid);
         let parent_node = self.get_node(&parent_node_uid).await?;
 
         if matches!(parent_node.node_type, TypeNode::Album) {
@@ -372,6 +384,10 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     where
         R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
     {
+        info!(
+            "Uploading photo {} to album {}.",
+            file_name, parent_node_uid
+        );
         let photos_root_ids = self
             .shares
             .get_photos_share_ids(&self.cache, &self.crypto, &self.remote_client)
@@ -382,6 +398,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
             .upload_file(
                 make_node_uid(&photos_root_ids.VolumeID, &photos_root_ids.RootNodeId),
                 file_name,
+                true,
                 reader,
                 &self.cache,
                 &self.crypto,
@@ -438,6 +455,7 @@ impl<PGPProv: proton_crypto::crypto::PGPProviderSync, SRPProv: proton_crypto::sr
     ///
     /// Returns an error if the deletion request fails remotely.
     pub async fn delete_nodes(&mut self, node_uids: Vec<String>) -> Result<Vec<(String, String)>> {
+        info!("Deleting nodes {:?}.", node_uids);
         let failed = self.remote_client.delete_nodes(&node_uids).await?;
 
         node_uids

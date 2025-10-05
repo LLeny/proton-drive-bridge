@@ -9,7 +9,10 @@ use iced::{
     widget::{column, container, responsive, scrollable, text},
 };
 use iced_table::table;
-use libunftp::notification::{DataEvent, DataListener, EventMeta, PresenceEvent, PresenceListener};
+use libunftp::{
+    ServerBuilder,
+    notification::{DataEvent, DataListener, EventMeta, PresenceEvent, PresenceListener},
+};
 use log::error;
 use pmapi::client::{authenticator::AuthTokens, session_store::SessionStore};
 use std::sync::Arc;
@@ -18,7 +21,6 @@ use tokio::sync::{
     mpsc::{UnboundedSender, unbounded_channel},
 };
 use unftp_auth_jsonfile::JsonFileAuthenticator;
-use unftp_sbe_pd::ProtonDriveStorage;
 
 const MAX_ROW_COUNT: usize = 100;
 
@@ -256,11 +258,13 @@ async fn run_ftp_server_worker(
     let presence_notif = PresenceNotifier::new(tx.clone());
     let data_notif = DataNotifier::new(tx.clone());
 
-    let mut server_builder = libunftp::ServerBuilder::new(Box::new(move || {
-        let pgp = proton_crypto::new_pgp_provider();
-        let srp = proton_crypto::new_srp_provider();
-        ProtonDriveStorage::new(pgp, srp, auth.clone(), session_store.clone(), config.worker_count)
-            .expect("Couldn't initialize FTP Server")
+    let client_factory =
+        unftp_sbe_pd::factory::Factory::new(auth, session_store, config.worker_count);
+
+    let mut server_builder = ServerBuilder::new(Box::new(move || {
+        client_factory
+            .new_protondrive_storage_client()
+            .expect("Failed to create ProtonDriveStorage client")
     }))
     .greeting(greeting)
     .idle_session_timeout(86400)
