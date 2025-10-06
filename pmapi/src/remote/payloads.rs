@@ -658,7 +658,7 @@ pub(crate) struct DecryptedNode<PGPProv: proton_crypto::crypto::PGPProviderSync>
     pub(crate) keys: UnlockedUserKey,
     pub(crate) name_verification_key: PublicKey,
     pub(crate) content_session_key: Option<PGPProv::SessionKey>,
-    pub(crate) hash_key: Option<String>,
+    pub(crate) hash_key: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -333,14 +333,11 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             && let Some(folder) = &encrypted_node.EncryptedCrypto.Folder
         {
             hash_key = Some(
-                String::from_utf8(self.decrypt(
+                self.decrypt(
                     &folder.ArmoredHashKey,
                     &decrypted_node_key.private,
                     &key_verification_key,
-                )?)
-                .map_err(|e| {
-                    APIError::PGP(format!("Couldn't parse decrypted hash key as UTF-8: {e}"))
-                })?,
+                )?,
             );
             let _hash_key_author = encrypted_node.EncryptedCrypto.SignatureEmail.clone();
             // TODO
@@ -348,14 +345,11 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             && let Some(album) = &encrypted_node.EncryptedCrypto.Album
         {
             hash_key = Some(
-                String::from_utf8(self.decrypt(
+                self.decrypt(
                     &album.NodeHashKey,
                     &decrypted_node_key.private,
                     &key_verification_key,
-                )?)
-                .map_err(|e| {
-                    APIError::PGP(format!("Couldn't parse decrypted hash key as UTF-8: {e}"))
-                })?,
+                )?,
             );
             let _hash_key_author = encrypted_node.EncryptedCrypto.SignatureEmail.clone();
             // TODO
