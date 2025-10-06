@@ -136,7 +136,7 @@ proton-drive-bridge --cli --auth-file /path/to/users.json
 
 ### Prerequisites
 
-- Rust (latest stable version recommended)
+- Rust (min. 1.90, latest stable version recommended)
 - Go
 
 
