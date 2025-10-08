@@ -15,6 +15,19 @@ use tokio::sync::{
     oneshot,
 };
 
+async fn send_and_wait<T>(
+    tx: &Sender<PDCommand>,
+    make_cmd: impl FnOnce(oneshot::Sender<std::result::Result<T, String>>) -> PDCommand,
+) -> Result<T> {
+    let (reply, rx) = oneshot::channel();
+    tx.send(make_cmd(reply))
+        .await
+        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
+    rx.await
+        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
+        .map_err(log_pd_error)
+}
+
 pub enum PDCommand {
     GetPhotosRoot {
         reply: oneshot::Sender<std::result::Result<Node, String>>,
@@ -149,18 +162,13 @@ pub(crate) async fn send_upload_file(
     file_name: String,
     reader: UploadReader,
 ) -> Result<usize> {
-    let (reply, rx) = oneshot::channel();
-    tx.send(PDCommand::UploadFile {
+    send_and_wait(tx, |reply| PDCommand::UploadFile {
         parent_node_uid,
         file_name,
         reader,
         reply,
     })
     .await
-    .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
-    rx.await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(log_pd_error)
 }
 
 pub(crate) async fn send_create_folder(
@@ -168,30 +176,19 @@ pub(crate) async fn send_create_folder(
     parent_node_uid: String,
     folder_name: String,
 ) -> Result<Node> {
-    let (reply, rx) = oneshot::channel();
-    tx.send(PDCommand::CreateFolder {
+    send_and_wait(tx, |reply| PDCommand::CreateFolder {
         parent_node_uid,
         folder_name,
         reply,
     })
     .await
-    .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
-    rx.await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(log_pd_error)
 }
 
 pub(crate) async fn send_delete_nodes(
     tx: &Sender<PDCommand>,
     node_uids: Vec<String>,
 ) -> Result<Vec<(String, String)>> {
-    let (reply, rx) = oneshot::channel();
-    tx.send(PDCommand::DeleteNodes { node_uids, reply })
-        .await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
-    rx.await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(log_pd_error)
+    send_and_wait(tx, |reply| PDCommand::DeleteNodes { node_uids, reply }).await
 }
 
 pub(crate) async fn send_rename_node(
@@ -199,69 +196,36 @@ pub(crate) async fn send_rename_node(
     node_uid: String,
     new_name: String,
 ) -> Result<()> {
-    let (reply, rx) = oneshot::channel();
-    tx.send(PDCommand::RenameNode {
+    send_and_wait(tx, |reply| PDCommand::RenameNode {
         uid: node_uid,
         new_name,
         reply,
     })
     .await
-    .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
-    rx.await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(log_pd_error)
 }
 
 pub(crate) async fn send_get_root(tx: &Sender<PDCommand>) -> Result<Node> {
-    let (reply, rx) = oneshot::channel();
-    tx.send(PDCommand::GetRoot { reply })
-        .await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
-    rx.await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(log_pd_error)
+    send_and_wait(tx, |reply| PDCommand::GetRoot { reply }).await
 }
 
 pub(crate) async fn send_get_photos_root(tx: &Sender<PDCommand>) -> Result<Node> {
-    let (reply, rx) = oneshot::channel();
-    tx.send(PDCommand::GetPhotosRoot { reply })
-        .await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
-    rx.await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(log_pd_error)
+    send_and_wait(tx, |reply| PDCommand::GetPhotosRoot { reply }).await
 }
 
 pub(crate) async fn send_folder_children(
     tx: &Sender<PDCommand>,
     uid: impl Into<String>,
 ) -> Result<Vec<Node>> {
-    let (reply, rx) = oneshot::channel();
-    tx.send(PDCommand::FolderChildren {
-        uid: uid.into(),
-        reply,
-    })
-    .await
-    .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
-    rx.await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(log_pd_error)
+    let uid = uid.into();
+    send_and_wait(tx, |reply| PDCommand::FolderChildren { uid, reply }).await
 }
 
 pub(crate) async fn send_get_downloader(
     tx: &Sender<PDCommand>,
     uid: impl Into<String>,
 ) -> Result<FileDownloader> {
-    let (reply, rx) = oneshot::channel();
-    tx.send(PDCommand::GetDownloader {
-        uid: uid.into(),
-        reply,
-    })
-    .await
-    .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?;
-    rx.await
-        .map_err(|e| Error::new(ErrorKind::LocalError, e.to_string()))?
-        .map_err(log_pd_error)
+    let uid = uid.into();
+    send_and_wait(tx, |reply| PDCommand::GetDownloader { uid, reply }).await
 }
 
 fn log_pd_error(err: String) -> Error {
