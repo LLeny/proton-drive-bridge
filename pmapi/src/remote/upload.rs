@@ -48,14 +48,89 @@ impl Client {
         SRPProv: SRPProvider,
         Reader: AsyncRead + Send + Sync + Unpin + 'static,
     {
-        let mut block_index: usize = 1;
-        let mut reader = reader;
-        let mut manifest: Vec<u8> = vec![];
-        let mut total_read: usize = 0;
-        let mut blocks_sha1 = Sha1::new();
         let address_key = address_key.to_pgp(crypto.get_pgp_provider())?;
-        let mut image_data: Vec<u8> = vec![];
-        let mut commit_rxs: Vec<oneshot::Receiver<Result<CommitBlock>>> = Vec::new();
+
+        let (blocks, manifest, total_read, blocks_sha1, image_data) = self
+            .process_blocks(
+                reader,
+                is_image,
+                session_key,
+                node_key,
+                &address_key,
+                revision_uid,
+                address_id.clone(),
+                crypto,
+            )
+            .await?;
+
+        let blocks: Vec<CommitBlock> = join_all(blocks)
+            .await
+            .into_iter()
+            .map(|r| r.map_err(|e| APIError::Upload(e.to_string()))?)
+            .collect::<Result<Vec<_>>>()
+            .map_err(|e| APIError::Upload(e.to_string()))?;
+
+        let mut final_manifest = manifest;
+        if is_image {
+            let thumbnail_hash = self
+                .handle_thumbnail_upload(
+                    revision_uid,
+                    &image_data,
+                    photo,
+                    crypto,
+                    session_key,
+                    &address_key,
+                    address_id,
+                )
+                .await?;
+            final_manifest.splice(0..0, thumbnail_hash);
+        }
+
+        self.commit_upload(
+            revision_uid,
+            signature_email,
+            &final_manifest,
+            &blocks,
+            total_read,
+            &blocks_sha1,
+            is_image,
+            crypto,
+            node_key,
+            &address_key,
+        )
+        .await?;
+
+        Ok(blocks.iter().map(|b| b.Size).sum())
+    }
+
+    async fn process_blocks<Reader, PGPProv, SRPProv>(
+        &self,
+        mut reader: Reader,
+        is_image: bool,
+        session_key: &PGPProv::SessionKey,
+        node_key: &PGPProv::PrivateKey,
+        address_key: &PGPProv::PrivateKey,
+        revision_uid: &str,
+        address_id: String,
+        crypto: &Crypto<PGPProv, SRPProv>,
+    ) -> Result<(
+        Vec<oneshot::Receiver<Result<CommitBlock>>>,
+        Vec<u8>,
+        usize,
+        Sha1,
+        Vec<u8>,
+    )>
+    where
+        PGPProv: PGPProviderSync,
+        SRPProv: SRPProvider,
+        Reader: AsyncRead + Send + Sync + Unpin + 'static,
+    {
+        let mut block_index = 1;
+        let mut manifest = Vec::new();
+        let mut total_read = 0;
+        let mut blocks_sha1 = Sha1::new();
+        let mut image_data = Vec::new();
+        let mut commit_rxs = Vec::new();
 
         while let Some(chunk) = Box::pin(Self::read_chunks(&mut reader, FILE_CHUNK_SIZE))
             .next()
@@ -65,17 +140,16 @@ impl Client {
             let n = buf.len();
 
             if is_image {
-                image_data.extend_from_slice(&buf[..n]);
+                image_data.extend_from_slice(&buf);
             }
 
             total_read += n;
-            blocks_sha1.update(&buf[..n]);
+            blocks_sha1.update(&buf);
 
             let (encrypted, armored_signature) =
-                crypto.encrypt_block(session_key, node_key, &address_key, &buf[..n])?;
+                crypto.encrypt_block(session_key, node_key, address_key, &buf)?;
 
             let hash = Sha256::digest(&encrypted);
-
             manifest.extend(hash);
 
             let commit_rx = self
@@ -90,58 +164,81 @@ impl Client {
                 .await?;
 
             commit_rxs.push(commit_rx);
-
             block_index += 1;
         }
 
-        let blocks: Vec<CommitBlock> = join_all(commit_rxs)
-            .await
-            .into_iter()
-            .map(|r| r.map_err(|e| APIError::Upload(e.to_string()))?)
-            .collect::<Result<Vec<_>>>()
-            .map_err(|e| APIError::Upload(e.to_string()))?;
+        Ok((commit_rxs, manifest, total_read, blocks_sha1, image_data))
+    }
 
-        if is_image {
-            let mut border_len = MAX_THUMBNAIL_BORDER_LEN;
-            let thumbnail = loop {
-                let thumb = photo.create_thumbnail(&image_data, border_len);
-                match thumb {
-                    Ok(t) if t.len() >= MAX_THUMBNAIL_SIZE => {
-                        border_len *= 9 / 10;
-                        continue;
-                    }
-                    Ok(t) => break Ok(t),
-                    Err(e) => break Err(e),
+    async fn handle_thumbnail_upload<PGPProv, SRPProv>(
+        &self,
+        revision_uid: &str,
+        image_data: &[u8],
+        photo: &Photos<PGPProv, SRPProv>,
+        crypto: &Crypto<PGPProv, SRPProv>,
+        session_key: &PGPProv::SessionKey,
+        address_key: &PGPProv::PrivateKey,
+        address_id: String,
+    ) -> Result<Vec<u8>>
+    where
+        PGPProv: PGPProviderSync,
+        SRPProv: SRPProvider,
+    {
+        let mut border_len = MAX_THUMBNAIL_BORDER_LEN;
+        let thumbnail = loop {
+            let thumb = photo.create_thumbnail(image_data, border_len);
+            match thumb {
+                Ok(t) if t.len() >= MAX_THUMBNAIL_SIZE => {
+                    border_len = border_len * 9 / 10;
+                    continue;
                 }
-            }?;
+                Ok(t) => break t,
+                Err(e) => return Err(e),
+            }
+        };
 
-            let encrypted_thumbnail =
-                crypto.encrypted_thumbnail(session_key, &address_key, &thumbnail)?;
+        let encrypted_thumbnail =
+            crypto.encrypted_thumbnail(session_key, address_key, &thumbnail)?;
+        let hash = Sha256::digest(&encrypted_thumbnail);
 
-            let hash = Sha256::digest(&encrypted_thumbnail);
+        self.upload_thumbnail(
+            revision_uid,
+            address_id,
+            encrypted_thumbnail.as_slice(),
+            hash.to_vec(),
+        )
+        .await?;
 
-            let _ = self
-                .upload_thumbnail(
-                    revision_uid,
-                    address_id.clone(),
-                    encrypted_thumbnail.as_slice(),
-                    hash.to_vec(),
-                )
-                .await?;
+        Ok(hash.to_vec())
+    }
 
-            manifest.splice(0..0, hash);
-        }
-
-        let manifest_signature = crypto.sign_manifest(&manifest, &address_key)?;
-        let sha1 = hex::encode(blocks_sha1.finalize());
+    async fn commit_upload<PGPProv, SRPProv>(
+        &self,
+        revision_uid: &str,
+        signature_email: String,
+        manifest: &[u8],
+        blocks: &[CommitBlock],
+        total_read: usize,
+        blocks_sha1: &Sha1,
+        is_image: bool,
+        crypto: &Crypto<PGPProv, SRPProv>,
+        node_key: &PGPProv::PrivateKey,
+        address_key: &PGPProv::PrivateKey,
+    ) -> Result<()>
+    where
+        PGPProv: PGPProviderSync,
+        SRPProv: SRPProvider,
+    {
+        let manifest_signature = crypto.sign_manifest(manifest, address_key)?;
+        let sha1 = hex::encode(blocks_sha1.clone().finalize());
 
         let xattr = Self::generate_and_encrypt_xattr(
             crypto,
             total_read,
-            &blocks,
+            blocks,
             &sha1,
             node_key,
-            &address_key,
+            address_key,
         )?;
 
         self.commit_revision(
@@ -152,11 +249,7 @@ impl Client {
             is_image,
             &sha1,
         )
-        .await?;
-
-        let total_uploaded = blocks.iter().map(|b| b.Size).sum();
-
-        Ok(total_uploaded)
+        .await
     }
 
     fn read_chunks<Reader>(
@@ -167,35 +260,21 @@ impl Client {
         Reader: AsyncRead + Send + Sync + Unpin + 'static,
     {
         async_stream::try_stream! {
-            while let Ok(buf) = Self::read_n(reader, chunk_size).await {
-                if buf.is_empty() {
+            let mut buf = vec![0u8; chunk_size];
+
+            loop {
+                let n = reader
+                    .read(&mut buf)
+                    .map_err(|e| APIError::Upload(e.to_string()))
+                    .await?;
+
+                if n == 0 {
                     break;
                 }
-                yield buf;
+
+                yield buf[..n].to_vec();
             }
         }
-    }
-
-    async fn read_n<Reader>(reader: &mut Reader, bytes_to_read: usize) -> Result<Vec<u8>>
-    where
-        Reader: AsyncRead + Send + Sync + Unpin + 'static,
-    {
-        let mut buf = vec![0u8; bytes_to_read];
-        let mut filled = 0;
-
-        while filled < bytes_to_read {
-            let n = reader
-                .read(&mut buf[filled..])
-                .map_err(|e| APIError::Upload(e.to_string()))
-                .await?;
-            if n == 0 {
-                break;
-            }
-            filled += n;
-        }
-
-        buf.truncate(filled);
-        Ok(buf)
     }
 
     pub(crate) async fn upload_thumbnail(
