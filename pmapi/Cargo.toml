@@ -1,6 +1,6 @@
 [package]
 name = "pmapi"
-version = "0.4.1"
+version = "0.4.2"
 rust-version = "1.90"
 edition = "2024"
 description = "An API to access files on Proton Drive"
