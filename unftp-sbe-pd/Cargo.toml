@@ -1,6 +1,6 @@
 [package]
 name = "unftp-sbe-pd"
-version = "0.4.2"
+version = "0.4.3"
 rust-version = "1.90"
 edition = "2024"
 description = "A FTP server based on libunftp, storing files on Proton Drive"
