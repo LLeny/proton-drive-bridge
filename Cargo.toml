@@ -2,27 +2,26 @@
 resolver = "3"
 members = ["bridge", "pmapi", "unftp-sbe-pd"]
 
-
 [workspace.dependencies]
-log = { version = "0.4.27", features = [
+log = { version = "0.4.29", features = [
   "max_level_trace",
   "release_max_level_warn",
 ] }
-thiserror = { version = "2.0.16" }
-serde = { version = "1.0.226" }
+thiserror = { version = "2.0.17" }
+serde = { version = "1.0.228" }
 serde_repr = { version = "0.1.20" }
 serde-aux = { version = "4.7.0" }
 serde_json = { version = "1.0.145" }
-tokio = { version = "1.47.1", features = ["full"] }
+tokio = { version = "1.48.0", features = ["full"] }
 itertools = { version = "0.14.0" }
-proton-srp = { version = "0.7.0", registry = "proton_public" }
-proton-crypto = { version = "0.6.0", registry = "proton_public" }
-proton-crypto-account = { version = "0.12.0", registry = "proton_public" }
+proton-srp = { version = "0.7.1", registry = "proton_public" }
+proton-crypto = { version = "0.7.1", registry = "proton_public" }
+proton-crypto-account = { version = "0.12.3", registry = "proton_public" }
 libunftp = { git = "https://github.com/LLeny/libunftp.git", branch = "mlsd", default-features = false, features = ["ring"] }
 elsa = { version = "1.11.2" }
 once_cell = { version = "1.21.3" }
 futures = { version = "0.3.31" }
-zeroize = { version = "1.8.1" }
+zeroize = { version = "1.8.2" }
 async-trait = { version = "0.1.89" }
 chrono = { version = "0.4.42" }
 strum = { version = "0.27.2", features = ["derive"] }

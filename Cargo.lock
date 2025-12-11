@@ -2526,9 +2526,9 @@ dependencies = [
 
 [[package]]
 name = "gopenpgp-sys"
-version = "0.3.2"
+version = "0.3.3"
 source = "sparse+https://rust-registry.proton.me/index/"
-checksum = "cc8900e8a49909614cdc64efbe3bf87545d5d7d606cd7ccb25c330692eda677d"
+checksum = "e81404bf5710b9075990639b5349491b5d476b59b83950d02d939cc354ad4ec3"
 dependencies = [
  "base64",
  "bindgen",
@@ -3654,9 +3654,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.28"
+version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
+checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loop9"
@@ -4836,7 +4836,7 @@ dependencies = [
  "log",
  "mime_guess",
  "once_cell",
- "proton-crypto 0.6.0",
+ "proton-crypto",
  "proton-crypto-account",
  "proton-srp",
  "rand 0.9.2",
@@ -5040,25 +5040,9 @@ dependencies = [
 
 [[package]]
 name = "proton-crypto"
-version = "0.6.0"
+version = "0.7.1"
 source = "sparse+https://rust-registry.proton.me/index/"
-checksum = "b5d415dc55032304b084279cf2ebab6833ac6da517d833e13305f0d59bbffbe8"
-dependencies = [
- "gopenpgp-sys",
- "hex",
- "parking_lot 0.12.5",
- "proton-srp",
- "rand 0.8.5",
- "serde",
- "subtle",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "proton-crypto"
-version = "0.7.0"
-source = "sparse+https://rust-registry.proton.me/index/"
-checksum = "4362be505cca15c6bb4ae55104a06d8f7ffdabfc7587290d1c9582dbf42638e4"
+checksum = "c7dc0a26d77810cac1ccfbc7d62cbdbcc0bb858dc09b2beeeb6d755938b201b8"
 dependencies = [
  "gopenpgp-sys",
  "hex",
@@ -5072,15 +5056,15 @@ dependencies = [
 
 [[package]]
 name = "proton-crypto-account"
-version = "0.12.2"
+version = "0.12.3"
 source = "sparse+https://rust-registry.proton.me/index/"
-checksum = "217fa88b422f8bbe2517c80edf27d43419d86a6d4acc9a44c70a2f0f1dcafa81"
+checksum = "85c1f08882ab468facdd18a967653de2f5318b59f8e915ce186013c319b2580f"
 dependencies = [
  "base64",
  "derive_more",
  "futures",
  "hex",
- "proton-crypto 0.7.0",
+ "proton-crypto",
  "serde",
  "serde_json",
  "serde_repr",
@@ -5106,7 +5090,7 @@ dependencies = [
  "libunftp",
  "log",
  "pmapi",
- "proton-crypto 0.6.0",
+ "proton-crypto",
  "rfd",
  "rpassword",
  "serde",
@@ -6962,7 +6946,7 @@ dependencies = [
  "libunftp",
  "log",
  "pmapi",
- "proton-crypto 0.6.0",
+ "proton-crypto",
  "tokio",
 ]
 

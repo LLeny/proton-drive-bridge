@@ -332,25 +332,21 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
         if matches!(encrypted_node.Type, NodeType::Folder)
             && let Some(folder) = &encrypted_node.EncryptedCrypto.Folder
         {
-            hash_key = Some(
-                self.decrypt(
-                    &folder.ArmoredHashKey,
-                    &decrypted_node_key.private,
-                    &key_verification_key,
-                )?,
-            );
+            hash_key = Some(self.decrypt(
+                &folder.ArmoredHashKey,
+                &decrypted_node_key.private,
+                &key_verification_key,
+            )?);
             let _hash_key_author = encrypted_node.EncryptedCrypto.SignatureEmail.clone();
             // TODO
         } else if matches!(encrypted_node.Type, NodeType::Album)
             && let Some(album) = &encrypted_node.EncryptedCrypto.Album
         {
-            hash_key = Some(
-                self.decrypt(
-                    &album.NodeHashKey,
-                    &decrypted_node_key.private,
-                    &key_verification_key,
-                )?,
-            );
+            hash_key = Some(self.decrypt(
+                &album.NodeHashKey,
+                &decrypted_node_key.private,
+                &key_verification_key,
+            )?);
             let _hash_key_author = encrypted_node.EncryptedCrypto.SignatureEmail.clone();
             // TODO
         } else if matches!(encrypted_node.Type, NodeType::File)
@@ -566,11 +562,17 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
             .encrypt_session_key(&content_key_packet_session_key)
             .map_err(|e| APIError::PGP(format!("Couldn't encrypt session key: {e:?}")))?;
 
+        let session_key_data = self
+            .pgp_provider
+            .session_key_export(&content_key_packet_session_key)
+            .map_err(|e| APIError::PGP(format!("Couldn't export session key: {e:?}")))?
+            .0;
+
         let armored_session_key_signature = self
             .pgp_provider
             .new_signer()
             .with_signing_key(node_private_key)
-            .sign_detached(encrypted_session_key.as_slice(), DataEncoding::Armor)
+            .sign_detached(session_key_data, DataEncoding::Armor)
             .map_err(|e| APIError::PGP(format!("Error while signing the key: {e:?}")))?;
 
         Ok(NodeFileContentKey {
@@ -774,7 +776,12 @@ impl<PGPProv: PGPProviderSync, SRPProv: SRPProvider> Crypto<PGPProv, SRPProv> {
         })
     }
 
-    pub(crate) fn encrypted_thumbnail(&self, session_key: &PGPProv::SessionKey, signing_key: &PGPProv::PrivateKey, thumbnail: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn encrypted_thumbnail(
+        &self,
+        session_key: &PGPProv::SessionKey,
+        signing_key: &PGPProv::PrivateKey,
+        thumbnail: &[u8],
+    ) -> Result<Vec<u8>> {
         let encrypted_msg = self
             .pgp_provider
             .new_encryptor()
